@@ -6,7 +6,7 @@
 //
 //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
 //
-//	[ 制御コマンド送信 ]
+//	[ Sending commands ]
 //
 //---------------------------------------------------------------------------
 
@@ -20,7 +20,7 @@
 
 //---------------------------------------------------------------------------
 //
-//	基本型定義
+//	Primitive definitions
 //
 //---------------------------------------------------------------------------
 typedef unsigned int UINT;
@@ -44,14 +44,14 @@ typedef const char *LPCSTR;
 
 //---------------------------------------------------------------------------
 //
-//	定数定義
+//	Constant definitions
 //
 //---------------------------------------------------------------------------
 #define ENOTCONN	107
 
 //---------------------------------------------------------------------------
 //
-//	構造体定義
+//	Struct definitions
 //
 //---------------------------------------------------------------------------
 typedef struct
@@ -77,14 +77,14 @@ typedef struct
 
 //---------------------------------------------------------------------------
 //
-//	グローバル変数
+//	Global variables
 //
 //---------------------------------------------------------------------------
 int scsiid = -1;
 
 //---------------------------------------------------------------------------
 //
-//	ブリッジデバイス検索
+//	Search for bridge device
 //
 //---------------------------------------------------------------------------
 BOOL SearchRaSCSI()
@@ -93,7 +93,7 @@ BOOL SearchRaSCSI()
 	INQUIRYOPT_T inq;
 
 	for (i = 7; i >= 0; i--) {
-		// BRIDGEデバイス検索
+		// Search for bridge device
 		if (S_INQUIRY(sizeof(INQUIRY_T) , i, (struct INQUIRY*)&inq) < 0) {
 			continue;
 		}
@@ -102,7 +102,7 @@ BOOL SearchRaSCSI()
 			continue;
 		}
 
-		// オプション機能が有効化か調べる
+		// Check if option functions are initialized
 		if (S_INQUIRY(sizeof(INQUIRYOPT_T) , i, (struct INQUIRY*)&inq) < 0) {
 			continue;
 		}
@@ -111,7 +111,7 @@ BOOL SearchRaSCSI()
 			continue;
 		}
 
-		// SCSI ID確定
+		// Confirm SCSI ID
 		scsiid = i;
 		return TRUE;
 	}
@@ -121,7 +121,7 @@ BOOL SearchRaSCSI()
 
 //---------------------------------------------------------------------------
 //
-//	メッセージ取得
+//	Get messages
 //
 //---------------------------------------------------------------------------
 BOOL ScsiGetMessage(BYTE *buf)
@@ -160,7 +160,7 @@ BOOL ScsiGetMessage(BYTE *buf)
 
 //---------------------------------------------------------------------------
 //
-//	メッセージ送信
+//	Send messages
 //
 //---------------------------------------------------------------------------
 BOOL ScsiSendMessage(BYTE *buf)
@@ -197,7 +197,7 @@ BOOL ScsiSendMessage(BYTE *buf)
 
 //---------------------------------------------------------------------------
 //
-//	コマンド送信
+//	Send commands
 //
 //---------------------------------------------------------------------------
 BOOL SendCommand(char *buf)
@@ -220,7 +220,7 @@ BOOL SendCommand(char *buf)
 
 //---------------------------------------------------------------------------
 //
-//	主処理
+//	Main process
 //
 //---------------------------------------------------------------------------
 void main(int argc, char* argv[])
@@ -241,7 +241,7 @@ void main(int argc, char* argv[])
 	type = -1;
 	file = NULL;
 
-	// ヘルプの表示
+	// Display help
 	if (argc < 2) {
 		fprintf(stderr, "SCSI Target Emulator RaSCSI Controller\n");
 		fprintf(stderr,
@@ -265,13 +265,13 @@ void main(int argc, char* argv[])
 		exit(0);
 	}
 
-	// ブリッジデバイスを探す
+	// Look for bridge device
 	if (!SearchRaSCSI()) {
 		fprintf(stderr, "Error: bridge not found\n");
 		exit(ENOTCONN);
 	}
 
-	// 引数解析
+	// Argument parsing
 	opterr = 0;
 	while ((opt = getopt(argc, argv, "i:u:c:t:f:l-:")) != -1) {
 		switch (opt) {
@@ -354,27 +354,27 @@ void main(int argc, char* argv[])
 		}
 	}
 
-	// IDチェック
+	// ID check
 	if (id < 0 || id > 7) {
 		fprintf(stderr, "Error : Invalid ID\n");
 		exit(EINVAL);
 	}
 
-	// ユニットチェック
+	// Unit check
 	if (un < 0 || un > 1) {
 		fprintf(stderr, "Error : Invalid UNIT\n");
 		exit(EINVAL);
 	}
 
-	// コマンドチェック
+	// Command check
 	if (cmd < 0) {
-		cmd = 0;	// デフォルトはATTATCHとする
+		cmd = 0;	// The default is 'attach'
 	}
 
-	// タイプチェック
+	// Type check
 	if (cmd == 0 && type < 0) {
 
-		// 拡張子からタイプ判別を試みる
+		// Attempt type detection from extension
 		len = file ? strlen(file) : 0;
 		if (len > 4 && file[len - 4] == '.') {
 			ext = &file[len - 3];
@@ -401,7 +401,7 @@ void main(int argc, char* argv[])
 		}
 	}
 
-	// ファイルチェック(コマンドはATTACHでタイプはHD)
+	// File check (the command is 'attach' with type HD)
 	if (cmd == 0 && type >= 0 && type <= 1) {
 		if (!file) {
 			fprintf(stderr, "Error : Invalid file path\n");
@@ -409,7 +409,7 @@ void main(int argc, char* argv[])
 		}
 	}
 
-	// ファイルチェック(コマンドはINSERT)
+	// File check (the command is 'insert')
 	if (cmd == 2) {
 		if (!file) {
 			fprintf(stderr, "Error : Invalid file path\n");
@@ -417,17 +417,17 @@ void main(int argc, char* argv[])
 		}
 	}
 
-	// 必要でないtypeは0としておく
+	// Useless types are set to 0
 	if (type < 0) {
 		type = 0;
 	}
 
-	// 送信コマンド生成
+	// Create command to send
 	sprintf(buf, "%d %d %d %d %s\n", id, un, cmd, type, file ? file : "-");
 	if (!SendCommand(buf)) {
 		exit(ENOTCONN);
 	}
 
-	// 終了
+	// Quit
 	exit(0);
 }
