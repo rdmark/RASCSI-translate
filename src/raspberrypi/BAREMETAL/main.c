@@ -5,7 +5,7 @@
 //
 //	Powered by XM6 TypeG Technology.
 //	Copyright (C) 2019-2000 GIMONS
-//	[ メイン ]
+//	[ Main ]
 //
 //---------------------------------------------------------------------------
 
@@ -15,7 +15,7 @@
 
 //---------------------------------------------------------------------------
 //
-//	定数宣言(GIC)
+//	Constant statements (GIC)
 //
 //---------------------------------------------------------------------------
 #define GICD_BASEADDR		(uint32_t *)(0xFF841000)
@@ -39,7 +39,7 @@
 
 //---------------------------------------------------------------------------
 //
-//	定数定義(MMU)
+//	Constant definitions (MMU)
 //
 //---------------------------------------------------------------------------
 #define NUM_PGTABLE_ENTRIES	4096
@@ -53,7 +53,7 @@
 
 //---------------------------------------------------------------------------
 //
-//	MMU変換テーブル
+//	MMU conversion table
 //
 //---------------------------------------------------------------------------
 static RegType_t
@@ -62,7 +62,7 @@ static RegType_t
 
 //---------------------------------------------------------------------------
 //
-//	MMU変換テーブル構築
+//	MMU conversion table structure
 //
 //---------------------------------------------------------------------------
 int SetupPageTable()
@@ -70,20 +70,20 @@ int SetupPageTable()
 	int i;
 	uint32_t msg[5] = { 0 };
 
-	// VCの開始アドレスを取得
+	// Get the VC start address
 	if (mailbox_tag_message(
 		&msg[0], 5, MAILBOX_TAG_GET_VC_MEMORY, 8, 8, 0, 0) == 0) {
 		return -1;
 	}
 
-	// VCの開始アドレスまではノーマルキャッシュ設定
+	// Normal cache settings for the VC start address
 	msg[3] /= LEVEL1_BLOCKSIZE;
 	for (i = 0; i < msg[3]; i++) 
 	{
 		pagetable[i] = (LEVEL1_BLOCKSIZE * i) | MT_NORMAL;
 	}
 
-	// 残りはストロングオーダーでノーキャッシュ
+	// For the rest, use strong order and no cache
 	for (; i < NUM_PGTABLE_ENTRIES; i++) {
 		pagetable[i] = (LEVEL1_BLOCKSIZE * i) | MT_DEVICE_NS;
 	}
@@ -93,7 +93,7 @@ int SetupPageTable()
 
 //---------------------------------------------------------------------------
 //
-//	MMU有効
+//	Enable MMU
 //
 //---------------------------------------------------------------------------
 void EnableMMU()
@@ -103,7 +103,7 @@ void EnableMMU()
 
 //---------------------------------------------------------------------------
 //
-//	GICD初期化
+//	Initialize GICD
 //
 //---------------------------------------------------------------------------
 void InitGICD()
@@ -111,117 +111,117 @@ void InitGICD()
 	int i;
 	volatile uint32_t *gicd;
 
-	// RPI4のみ
+	// Only RPI4
 	if (RPi_IO_Base_Addr != 0xfe000000) {
 		return;
 	}
 
-	// GICDのベースアドレス
+	// GICD's base address
 	gicd = GICD_BASEADDR;
 
-	// GIC無効
+	// Disable GIC
 	gicd[GICD_CTLR] = 0;
 
-	// 割り込みクリア
+	// Clear interrupt
 	for (i = 0; i < 8; i++) {
-		// 割り込みイネーブルクリア
+		// Interrupt enable clear
 		gicd[GICD_ICENABLER0 + i] = 0xffffffff;
-		// 割り込みペンディングクリア
+		// Interrupt pending clear
 		gicd[GICD_ICPENDR0 + i] = 0xffffffff;
-		// 割り込みアクティブクリア
+		// Interrupt active clear
 		gicd[GICD_ICACTIVER0 + i] = 0xffffffff;
 	}
 
-	// 割り込み優先度
+	// Interrupt priority
 	for (i = 0; i < 64; i++) {
 		gicd[GICD_IPRIORITYR0 + i] = 0xa0a0a0a0;
 	}
 
-	// 割り込みターゲットをコア0に設定
+	// Set the interrupt target to core 0
 	for (i = 0; i < 64; i++) {
 		gicd[GICD_ITARGETSR0 + i] = 0x01010101;
 	}
 
-	// 割り込みをレベルトリガに設定
+	// Set interrupt to level trigger
 	for (i = 0; i < 64; i++) {
 		gicd[GICD_ICFGR0 + i] = 0;
 	}
 
-	// GIC有効
+	// Enable GIC
 	gicd[GICD_CTLR] = 1;
 }
 
 //---------------------------------------------------------------------------
 //
-//	GICC初期化
+//	Initialize GICC
 //
 //---------------------------------------------------------------------------
 void InitGICC()
 {
 	volatile uint32_t *gicc;
 
-	// RPI4のみ
+	// Only RPI4
 	if (RPi_IO_Base_Addr != 0xfe000000) {
 		return;
 	}
 
-	// GICCのベースアドレス
+	// GICC base address
 	gicc = GICC_BASEADDR;
 
-	// コアのCPUインターフェスを有効にする
+	// Enable core CPU interface
 	gicc[GICC_PMR] = 0xf0;
 	gicc[GICC_CTLR] = 1;
 }
 
 //---------------------------------------------------------------------------
 //
-//	各コアの初期化二段目
+//	Stage two of each core initilization
 //
 //---------------------------------------------------------------------------
 static volatile int nSetup = 0;
 void CoreSetup()
 {
-	// MMU初期化
+	// Initialize MMU
 	EnableMMU();
 
-	// GICC初期化
+	// Initialize GICC
 	InitGICC();
 
-	// セットアップ完了
+	// Finish setup
 	nSetup++;
 }
 
 //---------------------------------------------------------------------------
 //
-//	RaSCSIメイン
+//	RaSCSI Main
 //
 //---------------------------------------------------------------------------
 void startrascsi(void);
 
 //---------------------------------------------------------------------------
 //
-//	メイン
+//	Main
 //
 //---------------------------------------------------------------------------
 void main(void)
 {
-	// SmartStart初期化
+	// Initialize SmartStart
 	Init_EmbStdio(WriteText);
 	PiConsole_Init(0, 0, 0, printf);
 	displaySmartStart(printf);
 	ARM_setmaxspeed(printf);
 
-	// MMU変換テーブル初期化
+	// Initialize MMU conversion table
 	SetupPageTable();
 
-	// GICD初期化
+	// Initialize GICD
 	InitGICD();
 
-	// コア0セットアップ
+	// Setup core 0
 	CoreSetup();
 
 	printf("\n");
 
-	// RaSCSIスタート
+	// Start RaSCSI
 	startrascsi();
 }
