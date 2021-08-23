@@ -1,0 +1,5646 @@
+*** src/raspberrypi/disk.cpp	Sat Apr 11 22:51:52 2020
+--- src/raspberrypi/disk.cpp	Fri Mar 26 21:17:38 2021
+***************
+*** 1,55 ****
+  //---------------------------------------------------------------------------
+  //
+! //	X68000 EMULATOR "XM6"
+  //
+! //	Copyright (C) 2001-2006 ＰＩ．(ytanaka@ipc-tokai.or.jp)
+! //	Copyright (C) 2014-2020 GIMONS
+! //
+! //	XM6i
+  //	Copyright (C) 2010-2015 isaki@NetBSD.org
+  //	Copyright (C) 2010 Y.Sugahara
+- //
+  //	Imported sava's Anex86/T98Next image and MO format support patch.
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+  //	[ Disk ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "xm6.h"
+  #include "filepath.h"
+  #include "fileio.h"
+- #ifdef RASCSI
+- #include "gpiobus.h"
+- #ifndef BAREMETAL
+- #include "ctapdriver.h"
+- #endif	// BAREMETAL
+- #include "cfilesystem.h"
+- #include "disk.h"
+- #else
+- #include "vm.h"
+  #include "disk.h"
+! #include "windrv.h"
+! #include "ctapdriver.h"
+! #include "mfc_com.h"
+! #include "mfc_host.h"
+! #endif	// RASCSI
+  
+  //===========================================================================
+  //
+  //	Disk
+  //
+  //===========================================================================
+  //#define DISK_LOG
+! 
+! #ifdef RASCSI
+! #define BENDER_SIGNATURE "RaSCSI"
+! #else
+! #define BENDER_SIGNATURE "XM6"
+! #endif
+  
+  //===========================================================================
+  //
+  //	Disk track
+  //
+--- 1,46 ----
+  //---------------------------------------------------------------------------
+  //
+! //	SCSI Target Emulator RaSCSI (*^..^*)
+! //	for Raspberry Pi
+! //	Powered by XM6 TypeG Technology.
+  //
+! //	Copyright (C) 2001-2006 PI.(Twitter:@xm6_original)
+! //	Copyright (C) 2014-2021 GIMONS(Twitter:@kugimoto0715)
+  //	Copyright (C) 2010-2015 isaki@NetBSD.org
+  //	Copyright (C) 2010 Y.Sugahara
+  //	Imported sava's Anex86/T98Next image and MO format support patch.
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+  //	[ Disk ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "rascsi.h"
+  #include "filepath.h"
+  #include "fileio.h"
+  #include "disk.h"
+! 
+! #if USE_WAIT_CTRL == 1
+! #ifdef __cplusplus
+! extern "C" {
+! #endif
+! DWORD GetTimeUs();
+! void SleepUs(int us);
+! #ifdef __cplusplus
+! }
+! #endif
+! #endif	// USE_WAIT_CTRL
+  
+  //===========================================================================
+  //
+  //	Disk
+  //
+  //===========================================================================
+  //#define DISK_LOG
+! //#define DISK_LOG_WARNING
+  
+  //===========================================================================
+  //
+  //	Disk track
+  //
+***************
+*** 98,114 ****
+  //
+  //	Initialize
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL DiskTrack::Init(
+! 	int track, int size, int sectors, BOOL raw, off64_t imgoff)
+  {
+  	ASSERT(track >= 0);
+  	ASSERT((size >= 8) && (size <= 11));
+! 	ASSERT((sectors > 0) && (sectors <= 0x100));
+  	ASSERT(imgoff >= 0);
+  
+  	// Configure parameters
+  	dt.track = track;
+  	dt.size = size;
+  	dt.sectors = sectors;
+  	dt.raw = raw;
+--- 89,109 ----
+  //
+  //	Initialize
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL DiskTrack::Init(
+! 	Disk *p, int track, int size, int sectors, BOOL raw, off64_t imgoff)
+  {
++ 	ASSERT(p);
+  	ASSERT(track >= 0);
+  	ASSERT((size >= 8) && (size <= 11));
+! 	ASSERT((sectors > 0) && (sectors <= NumSectors));
+  	ASSERT(imgoff >= 0);
+  
++ 	// Disk
++ 	disk = p;
++ 
+  	// Configure parameters
+  	dt.track = track;
+  	dt.size = size;
+  	dt.sectors = sectors;
+  	dt.raw = raw;
+***************
+*** 126,153 ****
+  //---------------------------------------------------------------------------
+  //
+  //	Load
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL DiskTrack::Load(const Filepath& path)
+  {
+- 	Fileio fio;
+  	off64_t offset;
+  	int i;
+  	int length;
+  
+  	ASSERT(this);
+  
+  	// Not needed if already loaded
+  	if (dt.init) {
+  		ASSERT(dt.buffer);
+  		ASSERT(dt.changemap);
+  		return TRUE;
+  	}
+  
+! 	// Offset calculation (Consider 256 sectors before this)
+! 	offset = ((off64_t)dt.track << 8);
+  	if (dt.raw) {
+  		ASSERT(dt.size == 11);
+  		offset *= 0x930;
+  		offset += 0x10;
+  	} else {
+--- 121,150 ----
+  //---------------------------------------------------------------------------
+  //
+  //	Load
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL DiskTrack::Load()
+  {
+  	off64_t offset;
+  	int i;
+  	int length;
++ 	Fileio *fio;
++ 	Filepath path;
+  
+  	ASSERT(this);
+  
+  	// Not needed if already loaded
+  	if (dt.init) {
+  		ASSERT(dt.buffer);
+  		ASSERT(dt.changemap);
+  		return TRUE;
+  	}
+  
+! 	// Calculate offset
+	// Consider fixed sector numbers (NumSectors) for tracks before this
+! 	offset = ((off64_t)dt.track * NumSectors);
+  	if (dt.raw) {
+  		ASSERT(dt.size == 11);
+  		offset *= 0x930;
+  		offset += 0x10;
+  	} else {
+***************
+*** 160,192 ****
+  	// Calculate length (this track's data size)
+  	length = dt.sectors << dt.size;
+  
+  	// Allocate buffer memory
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= 0x100));
+  
+  	if (dt.buffer == NULL) {
+- #if defined(RASCSI) && !defined(BAREMETAL)
+- 		posix_memalign((void **)&dt.buffer, 512, ((length + 511) / 512) * 512);
+- #else
+  		dt.buffer = (BYTE *)malloc(length * sizeof(BYTE));
+- #endif	// RASCSI && !BAREMETAL
+  		dt.length = length;
+  	}
+  
+  	if (!dt.buffer) {
+  		return FALSE;
+  	}
+  
+  	// Reallocate if buffer length is different
+  	if (dt.length != (DWORD)length) {
+  		free(dt.buffer);
+- #if defined(RASCSI) && !defined(BAREMETAL)
+- 		posix_memalign((void **)&dt.buffer, 512, ((length + 511) / 512) * 512);
+- #else
+  		dt.buffer = (BYTE *)malloc(length * sizeof(BYTE));
+- #endif	// RASCSI && !BAREMETAL
+  		dt.length = length;
+  	}
+  
+  	// Allocate memory for changemap
+  	if (dt.changemap == NULL) {
+--- 157,181 ----
+  	// Calculate length (this track's data size)
+  	length = dt.sectors << dt.size;
+  
+  	// Allocate buffer memory
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= NumSectors));
+  
+  	if (dt.buffer == NULL) {
+  		dt.buffer = (BYTE *)malloc(length * sizeof(BYTE));
+  		dt.length = length;
+  	}
+  
+  	if (!dt.buffer) {
+  		return FALSE;
+  	}
+  
+  	// Reallocate if buffer length is different
+  	if (dt.length != (DWORD)length) {
+  		free(dt.buffer);
+  		dt.buffer = (BYTE *)malloc(length * sizeof(BYTE));
+  		dt.length = length;
+  	}
+  
+  	// Allocate memory for changemap
+  	if (dt.changemap == NULL) {
+***************
+*** 206,253 ****
+  	}
+  
+  	// Clear changemap
+  	memset(dt.changemap, 0x00, dt.sectors * sizeof(BOOL));
+  
+! 	// Read from file
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 	if (!fio.OpenDIO(path, Fileio::ReadOnly)) {
+! #else
+! 	if (!fio.Open(path, Fileio::ReadOnly)) {
+! #endif	// RASCSI && !BAREMETAL
+  		return FALSE;
+  	}
+  	if (dt.raw) {
+  		// Read partitions
+  		for (i = 0; i < dt.sectors; i++) {
+  			// Seek
+! 			if (!fio.Seek(offset)) {
+! 				fio.Close();
+  				return FALSE;
+  			}
+  
+  			// Read
+! 			if (!fio.Read(&dt.buffer[i << dt.size], 1 << dt.size)) {
+! 				fio.Close();
+  				return FALSE;
+  			}
+  
+  			// Next offset
+  			offset += 0x930;
+  		}
+  	} else {
+  		// Read continuously
+! 		if (!fio.Seek(offset)) {
+! 			fio.Close();
+  			return FALSE;
+  		}
+! 		if (!fio.Read(dt.buffer, length)) {
+! 			fio.Close();
+  			return FALSE;
+  		}
+  	}
+! 	fio.Close();
+  
+  	// Raise flag, finish cleanly
+  	dt.init = TRUE;
+  	dt.changed = FALSE;
+  	return TRUE;
+--- 195,241 ----
+  	}
+  
+  	// Clear changemap
+  	memset(dt.changemap, 0x00, dt.sectors * sizeof(BOOL));
+  
+! 	// Read from file (Prompt reusing fio so look up open mode)
+! 	fio = disk->GetFio();
+! 	disk->GetPath(path);
+! 	if (!fio->Open(path,
+! 		disk->IsWriteP() ? Fileio::ReadOnly : Fileio::ReadWrite)) {
+  		return FALSE;
+  	}
+  	if (dt.raw) {
+  		// Read partitions
+  		for (i = 0; i < dt.sectors; i++) {
+  			// Seek
+! 			if (!fio->Seek(offset)) {
+! 				fio->Close();
+  				return FALSE;
+  			}
+  
+  			// Read
+! 			if (!fio->Read(&dt.buffer[i << dt.size], 1 << dt.size)) {
+! 				fio->Close();
+  				return FALSE;
+  			}
+  
+  			// Next offset
+  			offset += 0x930;
+  		}
+  	} else {
+  		// Read continuously
+! 		if (!fio->Seek(offset)) {
+! 			fio->Close();
+  			return FALSE;
+  		}
+! 		if (!fio->Read(dt.buffer, length)) {
+! 			fio->Close();
+  			return FALSE;
+  		}
+  	}
+! 	fio->Close();
+  
+  	// Raise flag, finish cleanly
+  	dt.init = TRUE;
+  	dt.changed = FALSE;
+  	return TRUE;
+***************
+*** 256,273 ****
+  //---------------------------------------------------------------------------
+  //
+  //	Save
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL DiskTrack::Save(const Filepath& path)
+  {
+  	off64_t offset;
+  	int i;
+  	int j;
+- 	Fileio fio;
+  	int length;
+  	int total;
+  
+  	ASSERT(this);
+  
+  	// Not required if not initialized
+  	if (!dt.init) {
+--- 244,262 ----
+  //---------------------------------------------------------------------------
+  //
+  //	Save
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL DiskTrack::Save()
+  {
+  	off64_t offset;
+  	int i;
+  	int j;
+  	int length;
+  	int total;
++ 	Fileio *fio;
++ 	Filepath path;
+  
+  	ASSERT(this);
+  
+  	// Not required if not initialized
+  	if (!dt.init) {
+***************
+*** 281,307 ****
+  
+  	// Need to write
+  	ASSERT(dt.buffer);
+  	ASSERT(dt.changemap);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= 0x100));
+  
+  	// Do not write in RAW mode
+  	ASSERT(!dt.raw);
+  
+! 	// Calculate offset (Consider 256 tracks before this)
+! 	offset = ((off64_t)dt.track << 8);
+  	offset <<= dt.size;
+  
+  	// Add offset to actual image
+  	offset += dt.imgoffset;
+  
+  	// Calculate sector size
+  	length = 1 << dt.size;
+  
+  	// Open file
+! 	if (!fio.Open(path, Fileio::ReadWrite)) {
+  		return FALSE;
+  	}
+  
+  	// Write chunk loop
+  	for (i = 0; i < dt.sectors;) {
+--- 270,299 ----
+  
+  	// Need to write
+  	ASSERT(dt.buffer);
+  	ASSERT(dt.changemap);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= NumSectors));
+  
+  	// Do not write in RAW mode
+  	ASSERT(!dt.raw);
+  
+! 	// Calculate offset
+	// Consider fixed sector numbers (NumSectors) for tracks before this
+! 	offset = ((off64_t)dt.track * NumSectors);
+  	offset <<= dt.size;
+  
+  	// Add offset to actual image
+  	offset += dt.imgoffset;
+  
+  	// Calculate sector size
+  	length = 1 << dt.size;
+  
+  	// Open file
+! 	fio = disk->GetFio();
+! 	disk->GetPath(path);
+! 	if (!fio->Open(path, Fileio::ReadWrite)) {
+  		return FALSE;
+  	}
+  
+  	// Write chunk loop
+  	for (i = 0; i < dt.sectors;) {
+***************
+*** 309,320 ****
+  		if (dt.changemap[i]) {
+  			// Init write size
+  			total = 0;
+  
+  			// シーク
+! 			if (!fio.Seek(offset + ((off64_t)i << dt.size))) {
+! 				fio.Close();
+  				return FALSE;
+  			}
+  
+  			// Continuous sector size
+  			for (j = i; j < dt.sectors; j++) {
+--- 301,312 ----
+  		if (dt.changemap[i]) {
+  			// Init write size
+  			total = 0;
+  
+  			// シーク
+! 			if (!fio->Seek(offset + ((off64_t)i << dt.size))) {
+! 				fio->Close();
+  				return FALSE;
+  			}
+  
+  			// Continuous sector size
+  			for (j = i; j < dt.sectors; j++) {
+***************
+*** 326,337 ****
+  				// Calculate 1 sector
+  				total += length;
+  			}
+  
+  			// Write
+! 			if (!fio.Write(&dt.buffer[i << dt.size], total)) {
+! 				fio.Close();
+  				return FALSE;
+  			}
+  
+  			// To unchanged sector
+  			i = j;
+--- 318,329 ----
+  				// Calculate 1 sector
+  				total += length;
+  			}
+  
+  			// Write
+! 			if (!fio->Write(&dt.buffer[i << dt.size], total)) {
+! 				fio->Close();
+  				return FALSE;
+  			}
+  
+  			// To unchanged sector
+  			i = j;
+***************
+*** 340,350 ****
+  			i++;
+  		}
+  	}
+  
+  	// Close
+! 	fio.Close();
+  
+  	// Take down change flag and exit
+  	memset(dt.changemap, 0x00, dt.sectors * sizeof(BOOL));
+  	dt.changed = FALSE;
+  	return TRUE;
+--- 332,342 ----
+  			i++;
+  		}
+  	}
+  
+  	// Close
+! 	fio->Close();
+  
+  	// Take down change flag and exit
+  	memset(dt.changemap, 0x00, dt.sectors * sizeof(BOOL));
+  	dt.changed = FALSE;
+  	return TRUE;
+***************
+*** 357,367 ****
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL DiskTrack::Read(BYTE *buf, int sec) const
+  {
+  	ASSERT(this);
+  	ASSERT(buf);
+! 	ASSERT((sec >= 0) & (sec < 0x100));
+  
+  	// Error if not initialized
+  	if (!dt.init) {
+  		return FALSE;
+  	}
+--- 349,359 ----
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL DiskTrack::Read(BYTE *buf, int sec) const
+  {
+  	ASSERT(this);
+  	ASSERT(buf);
+! 	ASSERT((sec >= 0) & (sec < NumSectors));
+  
+  	// Error if not initialized
+  	if (!dt.init) {
+  		return FALSE;
+  	}
+***************
+*** 372,382 ****
+  	}
+  
+  	// Copy
+  	ASSERT(dt.buffer);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= 0x100));
+  	memcpy(buf, &dt.buffer[(off64_t)sec << dt.size], (off64_t)1 << dt.size);
+  
+  	// Success
+  	return TRUE;
+  }
+--- 364,374 ----
+  	}
+  
+  	// Copy
+  	ASSERT(dt.buffer);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= NumSectors));
+  	memcpy(buf, &dt.buffer[(off64_t)sec << dt.size], (off64_t)1 << dt.size);
+  
+  	// Success
+  	return TRUE;
+  }
+***************
+*** 391,401 ****
+  	int offset;
+  	int length;
+  
+  	ASSERT(this);
+  	ASSERT(buf);
+! 	ASSERT((sec >= 0) & (sec < 0x100));
+  	ASSERT(!dt.raw);
+  
+  	// Error if not initialized
+  	if (!dt.init) {
+  		return FALSE;
+--- 383,393 ----
+  	int offset;
+  	int length;
+  
+  	ASSERT(this);
+  	ASSERT(buf);
+! 	ASSERT((sec >= 0) & (sec < NumSectors));
+  	ASSERT(!dt.raw);
+  
+  	// Error if not initialized
+  	if (!dt.init) {
+  		return FALSE;
+***************
+*** 411,421 ****
+  	length = 1 << dt.size;
+  
+  	// Compare
+  	ASSERT(dt.buffer);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= 0x100));
+  	if (memcmp(buf, &dt.buffer[offset], length) == 0) {
+  		// Attempting to write the same thing, so exit normally
+  		return TRUE;
+  	}
+  
+--- 403,413 ----
+  	length = 1 << dt.size;
+  
+  	// Compare
+  	ASSERT(dt.buffer);
+  	ASSERT((dt.size >= 8) && (dt.size <= 11));
+! 	ASSERT((dt.sectors > 0) && (dt.sectors <= NumSectors));
+  	if (memcmp(buf, &dt.buffer[offset], length) == 0) {
+  		// Attempting to write the same thing, so exit normally
+  		return TRUE;
+  	}
+  
+***************
+*** 437,464 ****
+  //---------------------------------------------------------------------------
+  //
+  //	Constructor
+  //
+  //---------------------------------------------------------------------------
+! DiskCache::DiskCache(
+! 	const Filepath& path, int size, int blocks, off64_t imgoff)
+  {
+  	int i;
+  
+  	ASSERT((size >= 8) && (size <= 11));
+  	ASSERT(blocks > 0);
+  	ASSERT(imgoff >= 0);
+  
+  	// Cachework
+  	for (i = 0; i < CacheMax; i++) {
+  		cache[i].disktrk = NULL;
+  		cache[i].serial = 0;
+  	}
+  
+  	// Other
+  	serial = 0;
+- 	sec_path = path;
+  	sec_size = size;
+  	sec_blocks = blocks;
+  	cd_raw = FALSE;
+  	imgoffset = imgoff;
+  }
+--- 429,458 ----
+  //---------------------------------------------------------------------------
+  //
+  //	Constructor
+  //
+  //---------------------------------------------------------------------------
+! DiskCache::DiskCache(Disk *p, int size, int blocks, off64_t imgoff)
+  {
+  	int i;
+  
++ 	ASSERT(p);
+  	ASSERT((size >= 8) && (size <= 11));
+  	ASSERT(blocks > 0);
+  	ASSERT(imgoff >= 0);
+  
++ 	// Disk
++ 	disk = p;
++ 
+  	// Cachework
+  	for (i = 0; i < CacheMax; i++) {
+  		cache[i].disktrk = NULL;
+  		cache[i].serial = 0;
+  	}
+  
+  	// Other
+  	serial = 0;
+  	sec_size = size;
+  	sec_blocks = blocks;
+  	cd_raw = FALSE;
+  	imgoffset = imgoff;
+  }
+***************
+*** 502,512 ****
+  	// Store track
+  	for (i = 0; i < CacheMax; i++) {
+  		// Valid track?
+  		if (cache[i].disktrk) {
+  			// Store
+! 			if (!cache[i].disktrk->Save(sec_path)) {
+  				return FALSE;
+  			}
+  		}
+  	}
+  
+--- 496,506 ----
+  	// Store track
+  	for (i = 0; i < CacheMax; i++) {
+  		// Valid track?
+  		if (cache[i].disktrk) {
+  			// Store
+! 			if (!cache[i].disktrk->Save()) {
+  				return FALSE;
+  			}
+  		}
+  	}
+  
+***************
+*** 569,589 ****
+  	ASSERT(sec_size != 0);
+  
+  	// Update first
+  	Update();
+  
+! 	// Calculate track (256 sectors / fixed track)
+! 	track = block >> 8;
+  
+  	// Get that track data
+  	disktrk = Assign(track);
+  	if (!disktrk) {
+  		return FALSE;
+  	}
+  
+  	// Pass to track
+! 	return disktrk->Read(buf, (BYTE)block);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Sector write
+--- 563,585 ----
+  	ASSERT(sec_size != 0);
+  
+  	// Update first
+  	Update();
+  
+! 	// Calculate track
+! 	// Sector/track fix to NumSectors
+! 	track = block / DiskTrack::NumSectors;
+  
+  	// Get that track data
+  	disktrk = Assign(track);
+  	if (!disktrk) {
+  		return FALSE;
+  	}
+  
+  	// Pass to track
+! 	block &= DiskTrack::NumSectors - 1;
+! 	return disktrk->Read(buf, block);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Sector write
+***************
+*** 598,618 ****
+  	ASSERT(sec_size != 0);
+  
+  	// Update first
+  	Update();
+  
+! 	// Calculate track (256 sectors / fixed track)
+! 	track = block >> 8;
+  
+  	// Get that track data
+  	disktrk = Assign(track);
+  	if (!disktrk) {
+  		return FALSE;
+  	}
+  
+  	// Pass to track
+! 	return disktrk->Write(buf, (BYTE)block);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Assign to track
+--- 594,616 ----
+  	ASSERT(sec_size != 0);
+  
+  	// Update first
+  	Update();
+  
+! 	// Calculate track
+! 	// Sector/track fix to NumSectors
+! 	track = block / DiskTrack::NumSectors;
+  
+  	// Get that track data
+  	disktrk = Assign(track);
+  	if (!disktrk) {
+  		return FALSE;
+  	}
+  
+  	// Pass to track
+! 	block &= DiskTrack::NumSectors - 1;
+! 	return disktrk->Write(buf, block);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Assign to track
+***************
+*** 671,681 ****
+  			c = i;
+  		}
+  	}
+  
+  	// Save this track
+! 	if (!cache[c].disktrk->Save(sec_path)) {
+  		return NULL;
+  	}
+  
+  	// Delete this track
+  	disktrk = cache[c].disktrk;
+--- 669,679 ----
+  			c = i;
+  		}
+  	}
+  
+  	// Save this track
+! 	if (!cache[c].disktrk->Save()) {
+  		return NULL;
+  	}
+  
+  	// Delete this track
+  	disktrk = cache[c].disktrk;
+***************
+*** 705,730 ****
+  	ASSERT((index >= 0) && (index < CacheMax));
+  	ASSERT(track >= 0);
+  	ASSERT(!cache[index].disktrk);
+  
+  	// Get number of sectors for this track
+! 	sectors = sec_blocks - (track << 8);
+  	ASSERT(sectors > 0);
+! 	if (sectors > 0x100) {
+! 		sectors = 0x100;
+  	}
+  
+  	// Create disk track
+  	if (disktrk == NULL) {
+  		disktrk = new DiskTrack();
+  	}
+  
+  	// Init disk track
+! 	disktrk->Init(track, sec_size, sectors, cd_raw, imgoffset);
+  
+  	// Attempt load
+! 	if (!disktrk->Load(sec_path)) {
+  		// Fail
+  		delete disktrk;
+  		return FALSE;
+  	}
+  
+--- 703,728 ----
+  	ASSERT((index >= 0) && (index < CacheMax));
+  	ASSERT(track >= 0);
+  	ASSERT(!cache[index].disktrk);
+  
+  	// Get number of sectors for this track
+! 	sectors = sec_blocks - (track * DiskTrack::NumSectors);
+  	ASSERT(sectors > 0);
+! 	if (sectors > DiskTrack::NumSectors) {
+! 		sectors = DiskTrack::NumSectors;
+  	}
+  
+  	// Create disk track
+  	if (disktrk == NULL) {
+  		disktrk = new DiskTrack();
+  	}
+  
+  	// Init disk track
+! 	disktrk->Init(disk, track, sec_size, sectors, cd_raw, imgoffset);
+  
+  	// Attempt load
+! 	if (!disktrk->Load()) {
+  		// Fail
+  		delete disktrk;
+  		return FALSE;
+  	}
+  
+***************
+*** 826,970 ****
+  	disk.lock = FALSE;
+  	disk.attn = FALSE;
+  	disk.reset = TRUE;
+  }
+  
+- #ifndef RASCSI
+- //---------------------------------------------------------------------------
+- //
+- //	セーブ
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL Disk::Save(Fileio *fio, int ver)
+- {
+- 	DWORD sz;
+- 	DWORD padding;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 
+- 	// サイズをセーブ
+- 	sz = 52;
+- 	if (!fio->Write(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 
+- 	// 実体をセーブ
+- 	PROP_EXPORT(fio, disk.id);
+- 	PROP_EXPORT(fio, disk.ready);
+- 	PROP_EXPORT(fio, disk.writep);
+- 	PROP_EXPORT(fio, disk.readonly);
+- 	PROP_EXPORT(fio, disk.removable);
+- 	PROP_EXPORT(fio, disk.lock);
+- 	PROP_EXPORT(fio, disk.attn);
+- 	PROP_EXPORT(fio, disk.reset);
+- 	PROP_EXPORT(fio, disk.size);
+- 	PROP_EXPORT(fio, disk.blocks);
+- 	PROP_EXPORT(fio, disk.lun);
+- 	PROP_EXPORT(fio, disk.code);
+- 	PROP_EXPORT(fio, padding);
+- 
+- 	// パスをセーブ
+- 	if (!diskpath.Save(fio, ver)) {
+- 		return FALSE;
+- 	}
+- 
+- 	return TRUE;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	ロード
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL Disk::Load(Fileio *fio, int ver)
+- {
+- 	DWORD sz;
+- 	disk_t buf;
+- 	DWORD padding;
+- 	Filepath path;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 
+- 	// version2.03より前は、ディスクはセーブしていない
+- 	if (ver <= 0x0202) {
+- 		return TRUE;
+- 	}
+- 
+- 	// 現在のディスクキャッシュを削除
+- 	if (disk.dcache) {
+- 		disk.dcache->Save();
+- 		delete disk.dcache;
+- 		disk.dcache = NULL;
+- 	}
+- 
+- 	// サイズをロード、照合
+- 	if (!fio->Read(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 	if (sz != 52) {
+- 		return FALSE;
+- 	}
+- 
+- 	// バッファへロード
+- 	PROP_IMPORT(fio, buf.id);
+- 	PROP_IMPORT(fio, buf.ready);
+- 	PROP_IMPORT(fio, buf.writep);
+- 	PROP_IMPORT(fio, buf.readonly);
+- 	PROP_IMPORT(fio, buf.removable);
+- 	PROP_IMPORT(fio, buf.lock);
+- 	PROP_IMPORT(fio, buf.attn);
+- 	PROP_IMPORT(fio, buf.reset);
+- 	PROP_IMPORT(fio, buf.size);
+- 	PROP_IMPORT(fio, buf.blocks);
+- 	PROP_IMPORT(fio, buf.lun);
+- 	PROP_IMPORT(fio, buf.code);
+- 	PROP_IMPORT(fio, padding);
+- 
+- 	// パスをロード
+- 	if (!path.Load(fio, ver)) {
+- 		return FALSE;
+- 	}
+- 
+- 	// IDが一致した場合のみ、移動
+- 	if (disk.id == buf.id) {
+- 		// NULLなら何もしない
+- 		if (IsNULL()) {
+- 			return TRUE;
+- 		}
+- 
+- 		// セーブした時と同じ種類のデバイス
+- 		disk.ready = FALSE;
+- 		if (Open(path)) {
+- 			// Open内でディスクキャッシュは作成されている
+- 			// プロパティのみ移動
+- 			if (!disk.readonly) {
+- 				disk.writep = buf.writep;
+- 			}
+- 			disk.lock = buf.lock;
+- 			disk.attn = buf.attn;
+- 			disk.reset = buf.reset;
+- 			disk.lun = buf.lun;
+- 			disk.code = buf.code;
+- 
+- 			// 正常にロードできた
+- 			return TRUE;
+- 		}
+- 	}
+- 
+- 	// ディスクキャッシュ再作成
+- 	if (!IsReady()) {
+- 		disk.dcache = NULL;
+- 	} else {
+- 		disk.dcache = new DiskCache(diskpath, disk.size, disk.blocks);
+- 	}
+- 
+- 	return TRUE;
+- }
+- #endif	// RASCSI
+- 
+  //---------------------------------------------------------------------------
+  //
+  //	NULLチェック
+  //
+  //---------------------------------------------------------------------------
+--- 824,833 ----
+***************
+*** 999,1021 ****
+  //	※派生クラスで、オープン成功後の後処理として呼び出すこと
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL Disk::Open(const Filepath& path, BOOL /*attn*/)
+  {
+- 	Fileio fio;
+- 
+  	ASSERT(this);
+  	ASSERT((disk.size >= 8) && (disk.size <= 11));
+  	ASSERT(disk.blocks > 0);
+  
+  	// Ready
+  	disk.ready = TRUE;
+  
+  	// Init cache
+  	ASSERT(!disk.dcache);
+  	disk.dcache =
+! 		new DiskCache(path, disk.size, disk.blocks, disk.imgoffset);
+  
+  	// Able to open for read/write?
+  	if (fio.Open(path, Fileio::ReadWrite)) {
+  		// Able to write, not read-only
+  		disk.writep = FALSE;
+--- 862,882 ----
+  //	※派生クラスで、オープン成功後の後処理として呼び出すこと
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL Disk::Open(const Filepath& path, BOOL /*attn*/)
+  {
+  	ASSERT(this);
+  	ASSERT((disk.size >= 8) && (disk.size <= 11));
+  	ASSERT(disk.blocks > 0);
+  
+  	// Ready
+  	disk.ready = TRUE;
+  
+  	// Init cache
+  	ASSERT(!disk.dcache);
+  	disk.dcache =
+! 		new DiskCache(this, disk.size, disk.blocks, disk.imgoffset);
+  
+  	// Able to open for read/write?
+  	if (fio.Open(path, Fileio::ReadWrite)) {
+  		// Able to write, not read-only
+  		disk.writep = FALSE;
+***************
+*** 2358,2380 ****
+  {
+  	// Release lock, release attention
+  	disk.lock = FALSE;
+  	disk.attn = FALSE;
+  
+! 	// No reset, clear code
+! 	disk.reset = FALSE;
+  	disk.code = 0x00;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SASIHD::Open(const Filepath& path, BOOL /*attn*/)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+  
+--- 2219,2240 ----
+  {
+  	// Release lock, release attention
+  	disk.lock = FALSE;
+  	disk.attn = FALSE;
+  
+! 	// No reset, clear code
+! 	disk.reset = TRUE;
+  	disk.code = 0x00;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SASIHD::Open(const Filepath& path, BOOL /*attn*/)
+  {
+  	off64_t size;
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+  
+***************
+*** 2385,2395 ****
+  
+  	// Get file size
+  	size = fio.GetFileSize();
+  	fio.Close();
+  
+! #if defined(USE_MZ1F23_1024_SUPPORT)
+  	// For MZ-2500/MZ-2800, only for MZ-1F23(SASI 20M/sector size 1024)
+  	// 20M(22437888 BS=1024 C=21912)
+  	if (size == 0x1566000) {
+  		// Sector size and number of blocks
+  		disk.size = 10;
+--- 2245,2255 ----
+  
+  	// Get file size
+  	size = fio.GetFileSize();
+  	fio.Close();
+  
+! #if USE_MZ1F23_1024_SUPPORT == 1
+  	// For MZ-2500/MZ-2800, only for MZ-1F23(SASI 20M/sector size 1024)
+  	// 20M(22437888 BS=1024 C=21912)
+  	if (size == 0x1566000) {
+  		// Sector size and number of blocks
+  		disk.size = 10;
+***************
+*** 2398,2408 ****
+  		// Base class
+  		return Disk::Open(path);
+  	}
+  #endif	// USE_MZ1F23_1024_SUPPORT
+  
+! #if defined(REMOVE_FIXED_SASIHD_SIZE)
+  	// Check for 256 byte units
+  	if (size & 0xff) {
+  		return FALSE;
+  	}
+  
+--- 2258,2268 ----
+  		// Base class
+  		return Disk::Open(path);
+  	}
+  #endif	// USE_MZ1F23_1024_SUPPORT
+  
+! #if REMOVE_FIXED_SASIHD_SIZE == 1
+  	// Check for 256 byte units
+  	if (size & 0xff) {
+  		return FALSE;
+  	}
+  
+***************
+*** 2503,2525 ****
+  {
+  	// Release lock, release attention
+  	disk.lock = FALSE;
+  	disk.attn = FALSE;
+  
+! 	// No reset, clear code
+! 	disk.reset = FALSE;
+  	disk.code = 0x00;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSIHD::Open(const Filepath& path, BOOL /*attn*/)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+  
+--- 2363,2384 ----
+  {
+  	// Release lock, release attention
+  	disk.lock = FALSE;
+  	disk.attn = FALSE;
+  
+! 	// Reset, clear code
+! 	disk.reset = TRUE;
+  	disk.code = 0x00;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSIHD::Open(const Filepath& path, BOOL /*attn*/)
+  {
+  	off64_t size;
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+  
+***************
+*** 2539,2550 ****
+  
+  	// Over 10MB
+  	if (size < 0x9f5400) {
+  		return FALSE;
+  	}
+- 	// 2TB in accordance with xm6i
+- 	// There is something similar in wxw/wxw_cfg.cpp
+  	if (size > 2LL * 1024 * 1024 * 1024 * 1024) {
+  		return FALSE;
+  	}
+  
+  	// セクタサイズとブロック数
+--- 2398,2407 ----
+***************
+*** 2603,2613 ****
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Set vendor & product name
+! 	sprintf(vendor, BENDER_SIGNATURE);
+  	size = disk.blocks >> 11;
+  	if (size < 300)
+  		sprintf(product, "PRODRIVE LPS%dS", size);
+  	else if (size < 600)
+  		sprintf(product, "MAVERICK%dS", size);
+--- 2460,2470 ----
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Set vendor & product name
+! 	sprintf(vendor, DEFAULT_VENDER);
+  	size = disk.blocks >> 11;
+  	if (size < 300)
+  		sprintf(product, "PRODRIVE LPS%dS", size);
+  	else if (size < 600)
+  		sprintf(product, "MAVERICK%dS", size);
+***************
+*** 2760,2770 ****
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSIHD_NEC::Open(const Filepath& path, BOOL /*attn*/)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  	BYTE hdr[512];
+  	LPCTSTR ext;
+  
+  	ASSERT(this);
+--- 2617,2626 ----
+***************
+*** 2794,2829 ****
+  
+  	// Over 10MB
+  	if (size < 0x9f5400) {
+  		return FALSE;
+  	}
+- 	// 2TB in accordance with xm6i
+- 	// There is something similar in wxw/wxw_cfg.cpp
+  	if (size > 2LL * 1024 * 1024 * 1024 * 1024) {
+  		return FALSE;
+  	}
+  
+  	// Set parameters by file extension
+  	ext = path.GetFileExt();
+! 	if (xstrcasecmp(ext, _T(".HDN")) == 0) {
+  		// Default setting is sector size 512, sector no. 25, estimated 8 heads
+  		imgoffset = 0;
+  		imgsize = size;
+  		sectorsize = 512;
+  		sectors = 25;
+  		heads = 8;
+  		cylinders = (int)(size >> 9);
+  		cylinders >>= 3;
+  		cylinders /= 25;
+! 	} else if (xstrcasecmp(ext, _T(".HDI")) == 0) { // Anex86 HD image? 
+  		imgoffset = getDwordLE(&hdr[4 + 4]);
+  		imgsize = getDwordLE(&hdr[4 + 4 + 4]);
+  		sectorsize = getDwordLE(&hdr[4 + 4 + 4 + 4]);
+  		sectors = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4]);
+  		heads = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4 + 4]);
+  		cylinders = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4 + 4 + 4]);
+! 	} else if (xstrcasecmp(ext, _T(".NHD")) == 0 &&
+  		memcmp(hdr, "T98HDDIMAGE.R0\0", 15) == 0) { // T98Next HD image?
+  		imgoffset = getDwordLE(&hdr[0x10 + 0x100]);
+  		cylinders = getDwordLE(&hdr[0x10 + 0x100 + 4]);
+  		heads = getWordLE(&hdr[0x10 + 0x100 + 4 + 4]);
+  		sectors = getWordLE(&hdr[0x10 + 0x100 + 4 + 4 + 2]);
+--- 2650,2683 ----
+  
+  	// Over 10MB
+  	if (size < 0x9f5400) {
+  		return FALSE;
+  	}
+  	if (size > 2LL * 1024 * 1024 * 1024 * 1024) {
+  		return FALSE;
+  	}
+  
+  	// Set parameters by file extension
+  	ext = path.GetFileExt();
+! 	if (_xstrcasecmp(ext, _T(".HDN")) == 0) {
+  		// Default setting is sector size 512, sector no. 25, estimated 8 heads
+  		imgoffset = 0;
+  		imgsize = size;
+  		sectorsize = 512;
+  		sectors = 25;
+  		heads = 8;
+  		cylinders = (int)(size >> 9);
+  		cylinders >>= 3;
+  		cylinders /= 25;
+! 	} else if (_xstrcasecmp(ext, _T(".HDI")) == 0) { // Anex86 HD image? 
+  		imgoffset = getDwordLE(&hdr[4 + 4]);
+  		imgsize = getDwordLE(&hdr[4 + 4 + 4]);
+  		sectorsize = getDwordLE(&hdr[4 + 4 + 4 + 4]);
+  		sectors = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4]);
+  		heads = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4 + 4]);
+  		cylinders = getDwordLE(&hdr[4 + 4 + 4 + 4 + 4 + 4 + 4]);
+! 	} else if (_xstrcasecmp(ext, _T(".NHD")) == 0 &&
+  		memcmp(hdr, "T98HDDIMAGE.R0\0", 15) == 0) { // T98Next HD image?
+  		imgoffset = getDwordLE(&hdr[0x10 + 0x100]);
+  		cylinders = getDwordLE(&hdr[0x10 + 0x100 + 4]);
+  		heads = getWordLE(&hdr[0x10 + 0x100 + 4 + 4]);
+  		sectors = getWordLE(&hdr[0x10 + 0x100 + 4 + 4 + 2]);
+***************
+*** 3090,3100 ****
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSIMO::Open(const Filepath& path, BOOL attn)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+  
+--- 2944,2953 ----
+***************
+*** 3146,3235 ****
+  	}
+  
+  	return TRUE;
+  }
+  
+- #ifndef RASCSI
+- //---------------------------------------------------------------------------
+- //
+- //	Load
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL SCSIMO::Load(Fileio *fio, int ver)
+- {
+- 	DWORD sz;
+- 	disk_t buf;
+- 	DWORD padding;
+- 	Filepath path;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 	ASSERT(ver >= 0x0200);
+- 
+- 	// Before version 2.03 the disk did not save
+- 	if (ver <= 0x0202) {
+- 		return TRUE;
+- 	}
+- 
+- 	// Load and verify size
+- 	if (!fio->Read(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 	if (sz != 52) {
+- 		return FALSE;
+- 	}
+- 
+- 	// Load to buffer
+- 	PROP_IMPORT(fio, buf.id);
+- 	PROP_IMPORT(fio, buf.ready);
+- 	PROP_IMPORT(fio, buf.writep);
+- 	PROP_IMPORT(fio, buf.readonly);
+- 	PROP_IMPORT(fio, buf.removable);
+- 	PROP_IMPORT(fio, buf.lock);
+- 	PROP_IMPORT(fio, buf.attn);
+- 	PROP_IMPORT(fio, buf.reset);
+- 	PROP_IMPORT(fio, buf.size);
+- 	PROP_IMPORT(fio, buf.blocks);
+- 	PROP_IMPORT(fio, buf.lun);
+- 	PROP_IMPORT(fio, buf.code);
+- 	PROP_IMPORT(fio, padding);
+- 
+- 	// Load path
+- 	if (!path.Load(fio, ver)) {
+- 		return FALSE;
+- 	}
+- 
+- 	// Always eject
+- 	Eject(TRUE);
+- 
+- 	// Transition if ID matches
+- 	if (disk.id != buf.id) {
+- 		// Not MO when saved. Keep eject state.
+- 		return TRUE;
+- 	}
+- 
+- 	// Attempt to reopen
+- 	if (!Open(path, FALSE)) {
+- 		// Failed to reopen. Keep eject state.
+- 		return TRUE;
+- 	}
+- 
+- 	// Open内でディスクキャッシュは作成されている。プロパティのみ移動
+- 	if (!disk.readonly) {
+- 		disk.writep = buf.writep;
+- 	}
+- 	disk.lock = buf.lock;
+- 	disk.attn = buf.attn;
+- 	disk.reset = buf.reset;
+- 	disk.lun = buf.lun;
+- 	disk.code = buf.code;
+- 
+- 	// 正常にロードできた
+- 	return TRUE;
+- }
+- #endif	// RASCSI
+- 
+  //---------------------------------------------------------------------------
+  //
+  //	INQUIRY
+  //
+  //---------------------------------------------------------------------------
+--- 2999,3008 ----
+***************
+*** 3271,3281 ****
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], BENDER_SIGNATURE, strlen(BENDER_SIGNATURE));
+  
+  	// Product name
+  	memcpy(&buf[16], "M2513A", 6);
+  
+  	// Revision (XM6 version number)
+--- 3044,3054 ----
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], DEFAULT_VENDER, strlen(DEFAULT_VENDER));
+  
+  	// Product name
+  	memcpy(&buf[16], "M2513A", 6);
+  
+  	// Revision (XM6 version number)
+***************
+*** 3744,3859 ****
+  {
+  	// Clear track
+  	ClearTrack();
+  }
+  
+- #ifndef RASCSI
+- //---------------------------------------------------------------------------
+- //
+- //	ロード
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL SCSICD::Load(Fileio *fio, int ver)
+- {
+- 	DWORD sz;
+- 	disk_t buf;
+- 	DWORD padding;
+- 	Filepath path;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 	ASSERT(ver >= 0x0200);
+- 
+- 	// version2.03より前は、ディスクはセーブしていない
+- 	if (ver <= 0x0202) {
+- 		return TRUE;
+- 	}
+- 
+- 	// サイズをロード、照合
+- 	if (!fio->Read(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 	if (sz != 52) {
+- 		return FALSE;
+- 	}
+- 
+- 	// バッファへロード
+- 	PROP_IMPORT(fio, buf.id);
+- 	PROP_IMPORT(fio, buf.ready);
+- 	PROP_IMPORT(fio, buf.writep);
+- 	PROP_IMPORT(fio, buf.readonly);
+- 	PROP_IMPORT(fio, buf.removable);
+- 	PROP_IMPORT(fio, buf.lock);
+- 	PROP_IMPORT(fio, buf.attn);
+- 	PROP_IMPORT(fio, buf.reset);
+- 	PROP_IMPORT(fio, buf.size);
+- 	PROP_IMPORT(fio, buf.blocks);
+- 	PROP_IMPORT(fio, buf.lun);
+- 	PROP_IMPORT(fio, buf.code);
+- 	PROP_IMPORT(fio, padding);
+- 
+- 	// パスをロード
+- 	if (!path.Load(fio, ver)) {
+- 		return FALSE;
+- 	}
+- 
+- 	// 必ずイジェクト
+- 	Eject(TRUE);
+- 
+- 	// IDが一致した場合のみ、移動
+- 	if (disk.id != buf.id) {
+- 		// セーブ時にCD-ROMでなかった。イジェクト状態を維持
+- 		return TRUE;
+- 	}
+- 
+- 	// 再オープンを試みる
+- 	if (!Open(path, FALSE)) {
+- 		// 再オープンできない。イジェクト状態を維持
+- 		return TRUE;
+- 	}
+- 
+- 	// Open内でディスクキャッシュは作成されている。プロパティのみ移動
+- 	if (!disk.readonly) {
+- 		disk.writep = buf.writep;
+- 	}
+- 	disk.lock = buf.lock;
+- 	disk.attn = buf.attn;
+- 	disk.reset = buf.reset;
+- 	disk.lun = buf.lun;
+- 	disk.code = buf.code;
+- 
+- 	// 再度、ディスクキャッシュを破棄
+- 	if (disk.dcache) {
+- 		delete disk.dcache;
+- 		disk.dcache = NULL;
+- 	}
+- 	disk.dcache = NULL;
+- 
+- 	// 暫定
+- 	disk.blocks = track[0]->GetBlocks();
+- 	if (disk.blocks > 0) {
+- 		// ディスクキャッシュを作り直す
+- 		track[0]->GetPath(path);
+- 		disk.dcache = new DiskCache(path, disk.size, disk.blocks);
+- 		disk.dcache->SetRawMode(rawfile);
+- 
+- 		// データインデックスを再設定
+- 		dataindex = 0;
+- 	}
+- 
+- 	return TRUE;
+- }
+- #endif	// RASCSI
+- 
+  //---------------------------------------------------------------------------
+  //
+  //	Open
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSICD::Open(const Filepath& path, BOOL attn)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  	TCHAR file[5];
+  
+  	ASSERT(this);
+  	ASSERT(!disk.ready);
+--- 3517,3533 ----
+***************
+*** 3889,3899 ****
+  		fio.Read(file, 4);
+  		file[4] = '\0';
+  		fio.Close();
+  
+  		// If it starts with FILE, assume CUE
+! 		if (xstrncasecmp(file, _T("FILE"), 4) == 0) {
+  			// Open as CUE
+  			if (!OpenCue(path)) {
+  				return FALSE;
+  			}
+  		} else {
+--- 3563,3573 ----
+  		fio.Read(file, 4);
+  		file[4] = '\0';
+  		fio.Close();
+  
+  		// If it starts with FILE, assume CUE
+! 		if (_xstrncasecmp(file, _T("FILE"), 4) == 0) {
+  			// Open as CUE
+  			if (!OpenCue(path)) {
+  				return FALSE;
+  			}
+  		} else {
+***************
+*** 3944,3954 ****
+  //	Open (ISO)
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSICD::OpenIso(const Filepath& path)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  	BYTE header[12];
+  	BYTE sync[12];
+  
+  	ASSERT(this);
+--- 3618,3627 ----
+***************
+*** 4036,4046 ****
+  //	Open (Physical)
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL SCSICD::OpenPhysical(const Filepath& path)
+  {
+- 	Fileio fio;
+  	off64_t size;
+  
+  	ASSERT(this);
+  
+  	// 読み込みオープンが必要
+--- 3709,3718 ----
+***************
+*** 4124,4134 ****
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], BENDER_SIGNATURE, strlen(BENDER_SIGNATURE));
+  
+  	// Product name
+  	memcpy(&buf[16], "CD-ROM CDU-55S", 14);
+  
+  	// リビジョン(XM6のバージョンNo)
+--- 3796,3806 ----
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], DEFAULT_VENDER, strlen(DEFAULT_VENDER));
+  
+  	// Product name
+  	memcpy(&buf[16], "CD-ROM CDU-55S", 14);
+  
+  	// リビジョン(XM6のバージョンNo)
+***************
+*** 4187,4197 ****
+  		disk.blocks = track[index]->GetBlocks();
+  		ASSERT(disk.blocks > 0);
+  
+  		// Rebuild disk cache
+  		track[index]->GetPath(path);
+! 		disk.dcache = new DiskCache(path, disk.size, disk.blocks);
+  		disk.dcache->SetRawMode(rawfile);
+  
+  		// Reset data index
+  		dataindex = index;
+  	}
+--- 3859,3869 ----
+  		disk.blocks = track[index]->GetBlocks();
+  		ASSERT(disk.blocks > 0);
+  
+  		// Rebuild disk cache
+  		track[index]->GetPath(path);
+! 		disk.dcache = new DiskCache(this, disk.size, disk.blocks);
+  		disk.dcache->SetRawMode(rawfile);
+  
+  		// Reset data index
+  		dataindex = index;
+  	}
+***************
+*** 4529,4589 ****
+  SCSIBR::SCSIBR() : Disk()
+  {
+  	// Host bridge
+  	disk.id = MAKEID('S', 'C', 'B', 'R');
+  
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 	// Create TAP driver
+! 	tap = new CTapDriver();
+! 	m_bTapEnable = tap->Init();
+! 
+! 	// Generate MAC address
+! 	memset(mac_addr, 0x00, 6);
+! 	if (m_bTapEnable) {
+! 		tap->GetMacAddr(mac_addr);
+! 		mac_addr[5]++;
+! 	}
+! 
+! 	// Turn off packet reception flag
+! 	packet_enable = FALSE;
+! #endif	// RASCSI && !BAREMETAL
+! 
+! 	// Generate host file system
+! 	fs = new CFileSys();
+! 	fs->Reset();
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Destructor
+  //
+  //---------------------------------------------------------------------------
+  SCSIBR::~SCSIBR()
+  {
+- #if defined(RASCSI) && !defined(BAREMETAL)
+- 	// Destroy TAP driver
+- 	if (tap) {
+- 		tap->Cleanup();
+- 		delete tap;
+- 	}
+- #endif	// RASCSI && !BAREMETAL
+- 
+- 	// Release host file system
+- 	if (fs) {
+- 		fs->Reset();
+- 		delete fs;
+- 	}
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	INQUIRY
+  //
+  //---------------------------------------------------------------------------
+  int FASTCALL SCSIBR::Inquiry(
+  	const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor)
+  {
+  	char rev[32];
+  	int size;
+  
+  	ASSERT(this);
+  	ASSERT(cdb);
+--- 4201,4232 ----
+  SCSIBR::SCSIBR() : Disk()
+  {
+  	// Host bridge
+  	disk.id = MAKEID('S', 'C', 'B', 'R');
+  
+! 	// Clear pointer for message handler function
+! 	memset(pMsgFunc, 0x00, sizeof(pMsgFunc));
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	Destructor
+  //
+  //---------------------------------------------------------------------------
+  SCSIBR::~SCSIBR()
+  {
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	INQUIRY
+  //
+  //---------------------------------------------------------------------------
+  int FASTCALL SCSIBR::Inquiry(
+  	const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor)
+  {
++ 	int i;
+  	char rev[32];
+  	int size;
+  
+  	ASSERT(this);
+  	ASSERT(cdb);
+***************
+*** 4615,4646 ****
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], BENDER_SIGNATURE, strlen(BENDER_SIGNATURE));
+  
+  	// Product name
+! 	memcpy(&buf[16], "RASCSI BRIDGE", 13);
+  
+  	// Revision (XM6 version number)
+  	sprintf(rev, "0%01d%01d%01d",
+  				(int)major, (int)(minor >> 4), (int)(minor & 0x0f));
+  	memcpy(&buf[32], rev, 4);
+  
+! 	// Option function enabling flag
+! 	buf[36] = '0';
+! 
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 	// Enable TAP
+! 	if (m_bTapEnable) {
+! 		buf[37] = '1';
+  	}
+- #endif	// RASCSI && !BAREMETAL
+- 
+- 	// Enable CFileSys
+- 	buf[38] = '1';
+  
+  	// Size of returnable data
+  	size = (buf[4] + 5);
+  
+  	// 相手のバッファが少なければ制限する
+--- 4258,4281 ----
+  
+  	// Fill with blanks
+  	memset(&buf[8], 0x20, buf[4] - 3);
+  
+  	// Vendor
+! 	memcpy(&buf[8], DEFAULT_VENDER, strlen(DEFAULT_VENDER));
+  
+  	// Product name
+! 	memcpy(&buf[16], BRIDGE_PRODUCT, strlen(BRIDGE_PRODUCT));
+  
+  	// Revision (XM6 version number)
+  	sprintf(rev, "0%01d%01d%01d",
+  				(int)major, (int)(minor >> 4), (int)(minor & 0x0f));
+  	memcpy(&buf[32], rev, 4);
+  
+! 	// Reflect option enabler flag from message handler function
+! 	for (i = 0; i < 8; i++) {
+! 		buf[36 + i] = pMsgFunc[0] ? '1' : '0';
+  	}
+  
+  	// Size of returnable data
+  	size = (buf[4] + 5);
+  
+  	// 相手のバッファが少なければ制限する
+***************
+*** 4673,4779 ****
+  //
+  //---------------------------------------------------------------------------
+  int FASTCALL SCSIBR::GetMessage10(const DWORD *cdb, BYTE *buf)
+  {
+  	int type;
+- 	int phase;
+- #if defined(RASCSI) && !defined(BAREMETAL)
+  	int func;
+! 	int total_len;
+! 	int i;
+! #endif	// RASCSI && !BAREMETAL
+  
+  	ASSERT(this);
+  
+  	// Type
+  	type = cdb[2];
+  
+- #if defined(RASCSI) && !defined(BAREMETAL)
+  	// Function number
+  	func = cdb[3];
+- #endif	// RASCSI && !BAREMETAL
+  
+  	// Phase
+  	phase = cdb[9];
+  
+! 	switch (type) {
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 		case 1:		// Ethernet
+! 			// Do not process if TAP is disabled
+! 			if (!m_bTapEnable) {
+! 				return 0;
+! 			}
+! 
+! 			switch (func) {
+! 				case 0:		// Get MAC address
+! 					return GetMacAddr(buf);
+! 
+! 				case 1:		// Receive packet (size & buffer separately)
+! 					if (phase == 0) {
+! 						// Get packet size
+! 						ReceivePacket();
+! 						buf[0] = (BYTE)(packet_len >> 8);
+! 						buf[1] = (BYTE)packet_len;
+! 						return 2;
+! 					} else {
+! 						// Get packet data
+! 						GetPacketBuf(buf);
+! 						return packet_len;
+! 					}
+! 
+! 				case 2:		// Receive packet (size & buffer together)
+! 					ReceivePacket();
+! 					buf[0] = (BYTE)(packet_len >> 8);
+! 					buf[1] = (BYTE)packet_len;
+! 					GetPacketBuf(&buf[2]);
+! 					return packet_len + 2;
+! 
+! 				case 3:		// Receive packets simultaneously (size & buffer together)
+! 					// Max number of simultaneous packets is currentled fixed at 10
+! 					// Increasing it will probably not make it faster
+! 					total_len = 0;
+! 					for (i = 0; i < 10; i++) {
+! 						ReceivePacket();
+! 						*buf++ = (BYTE)(packet_len >> 8);
+! 						*buf++ = (BYTE)packet_len;
+! 						total_len += 2;
+! 						if (packet_len == 0)
+! 							break;
+! 						GetPacketBuf(buf);
+! 						buf += packet_len;
+! 						total_len += packet_len;
+! 					}
+! 					return total_len;
+! 			}
+! 			break;
+! #endif	// RASCSI && !BAREMETAL
+! 
+! 		case 2:		// Host drive
+! 			switch (phase) {
+! 				case 0:		// Read result code
+! 					return ReadFsResult(buf);
+  
+! 				case 1:		// Read return data
+! 					return ReadFsOut(buf);
+  
+! 				case 2:		// Read additional return data
+! 					return ReadFsOpt(buf);
+! 			}
+! 			break;
+  	}
+  
+! 	// Error
+! 	ASSERT(FALSE);
+! 	return 0;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	SEND MESSAGE(10)
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL SCSIBR::SendMessage10(const DWORD *cdb, BYTE *buf)
+  {
+  	int type;
+  	int func;
+  	int phase;
+  	int len;
+--- 4308,4361 ----
+  //
+  //---------------------------------------------------------------------------
+  int FASTCALL SCSIBR::GetMessage10(const DWORD *cdb, BYTE *buf)
+  {
+  	int type;
+  	int func;
+! 	int phase;
+! 	int len;
+  
+  	ASSERT(this);
++ 	ASSERT(cdb);
++ 	ASSERT(buf);
+  
+  	// Type
+  	type = cdb[2];
+  
+  	// Function number
+  	func = cdb[3];
+  
+  	// Phase
+  	phase = cdb[9];
+  
+! 	// Get number of reads
+! 	len = cdb[6];
+! 	len <<= 8;
+! 	len |= cdb[7];
+! 	len <<= 8;
+! 	len |= cdb[8];
+  
+! 	// Type check
+! 	if (type < 0 || type > 7) {
+! 		return -1;
+! 	}
+  
+! 	// Callback registration check
+! 	if (!pMsgFunc[type]) {
+! 		return -1;
+  	}
+  
+! 	// Callback
+! 	return pMsgFunc[type](TRUE, func, phase, len, buf);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	SEND MESSAGE(10)
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL SCSIBR::SendMessage10(const DWORD *cdb, BYTE *buf)
+  {
+  	int type;
+  	int func;
+  	int phase;
+  	int len;
+***************
+*** 4796,6000 ****
+  	len <<= 8;
+  	len |= cdb[7];
+  	len <<= 8;
+  	len |= cdb[8];
+  
+! 	switch (type) {
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 		case 1:		// Ethernet
+! 			// Don't process if TAP disabled
+! 			if (!m_bTapEnable) {
+! 				return FALSE;
+! 			}
+! 
+! 			switch (func) {
+! 				case 0:		// Configure MAC address
+! 					SetMacAddr(buf);
+! 					return TRUE;
+! 
+! 				case 1:		// Send packet
+! 					SendPacket(buf, len);
+! 					return TRUE;
+! 			}
+! 			break;
+! #endif	// RASCSI && !BAREMETAL
+! 
+! 		case 2:		// Host drive
+! 			switch (phase) {
+! 				case 0:		// Execute command
+! 					WriteFs(func, buf);
+! 					return TRUE;
+! 
+! 				case 1:		// Write additional data
+! 					WriteFsOpt(buf, len);
+! 					return TRUE;
+! 			}
+! 			break;
+! 	}
+! 
+! 	// Error
+! 	ASSERT(FALSE);
+! 	return FALSE;
+! }
+! 
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! //---------------------------------------------------------------------------
+! //
+! //	Get MAC address
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL SCSIBR::GetMacAddr(BYTE *mac)
+! {
+! 	ASSERT(this);
+! 	ASSERT(mac);
+! 
+! 	memcpy(mac, mac_addr, 6);
+! 	return 6;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Configure MAC address
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL SCSIBR::SetMacAddr(BYTE *mac)
+! {
+! 	ASSERT(this);
+! 	ASSERT(mac);
+! 
+! 	memcpy(mac_addr, mac, 6);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Receive packet
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL SCSIBR::ReceivePacket()
+! {
+! 	static const BYTE bcast_addr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+! 
+! 	ASSERT(this);
+! 	ASSERT(tap);
+! 
+! 	// Previous packet was not received
+! 	if (packet_enable) {
+! 		return;
+! 	}
+! 
+! 	// Receive packet
+! 	packet_len = tap->Rx(packet_buf);
+! 
+! 	// Inspect received packet
+! 	if (memcmp(packet_buf, mac_addr, 6) != 0) {
+! 		if (memcmp(packet_buf, bcast_addr, 6) != 0) {
+! 			packet_len = 0;
+! 			return;
+! 		}
+! 	}
+! 
+! 	// Discard if exceeding buffer size
+! 	if (packet_len > 2048) {
+! 		packet_len = 0;
+! 		return;
+  	}
+  
+! 	// Store in packet buffer
+! 	if (packet_len > 0) {
+! 		packet_enable = TRUE;
+  	}
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	Get packet
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::GetPacketBuf(BYTE *buf)
+- {
+- 	int len;
+- 
+- 	ASSERT(this);
+- 	ASSERT(tap);
+- 	ASSERT(buf);
+- 
+- 	// Size limit
+- 	len = packet_len;
+- 	if (len > 2048) {
+- 		len = 2048;
+- 	}
+- 
+- 	// Copy
+- 	memcpy(buf, packet_buf, len);
+- 
+- 	// 受信済み
+- 	packet_enable = FALSE;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	パケット送信
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::SendPacket(BYTE *buf, int len)
+- {
+- 	ASSERT(this);
+- 	ASSERT(tap);
+- 	ASSERT(buf);
+- 
+- 	tap->Tx(buf, len);
+- }
+- #endif	// RASCSI && !BAREMETAL
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $40 - デバイス起動
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_InitDevice(BYTE *buf)
+- {
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	fs->Reset();
+- 	fsresult = fs->InitDevice((Human68k::argument_t*)buf);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $41 - ディレクトリチェック
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_CheckDir(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 	
+- 	fsresult = fs->CheckDir(nUnit, pNamests);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $42 - ディレクトリ作成
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_MakeDir(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 	
+- 	fsresult = fs->MakeDir(nUnit, pNamests);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $43 - ディレクトリ削除
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_RemoveDir(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 	
+- 	fsresult = fs->RemoveDir(nUnit, pNamests);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $44 - ファイル名変更
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Rename(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	Human68k::namests_t* pNamestsNew;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 
+- 	pNamestsNew = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 	
+- 	fsresult = fs->Rename(nUnit, pNamests, pNamestsNew);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $45 - ファイル削除
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Delete(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 	
+- 	fsresult = fs->Delete(nUnit, pNamests);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $46 - ファイル属性取得/設定
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Attribute(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::namests_t *pNamests;
+- 	DWORD nHumanAttribute;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nHumanAttribute = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->Attribute(nUnit, pNamests, nHumanAttribute);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $47 - ファイル検索
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Files(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::namests_t *pNamests;
+- 	Human68k::files_t *files;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 
+- 	files = (Human68k::files_t*)&buf[i];
+- 	i += sizeof(Human68k::files_t);
+- 
+- 	files->sector = ntohl(files->sector);
+- 	files->offset = ntohs(files->offset);
+- 	files->time = ntohs(files->time);
+- 	files->date = ntohs(files->date);
+- 	files->size = ntohl(files->size);
+- 
+- 	fsresult = fs->Files(nUnit, nKey, pNamests, files);
+- 
+- 	files->sector = htonl(files->sector);
+- 	files->offset = htons(files->offset);
+- 	files->time = htons(files->time);
+- 	files->date = htons(files->date);
+- 	files->size = htonl(files->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], files, sizeof(Human68k::files_t));
+- 	i += sizeof(Human68k::files_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $48 - ファイル次検索
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_NFiles(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::files_t *files;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	files = (Human68k::files_t*)&buf[i];
+- 	i += sizeof(Human68k::files_t);
+- 
+- 	files->sector = ntohl(files->sector);
+- 	files->offset = ntohs(files->offset);
+- 	files->time = ntohs(files->time);
+- 	files->date = ntohs(files->date);
+- 	files->size = ntohl(files->size);
+- 
+- 	fsresult = fs->NFiles(nUnit, nKey, files);
+- 
+- 	files->sector = htonl(files->sector);
+- 	files->offset = htons(files->offset);
+- 	files->time = htons(files->time);
+- 	files->date = htons(files->date);
+- 	files->size = htonl(files->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], files, sizeof(Human68k::files_t));
+- 	i += sizeof(Human68k::files_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $49 - ファイル作成
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Create(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::namests_t *pNamests;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD nAttribute;
+- 	BOOL bForce;
+- 	DWORD *dp;
+- 	BOOL *bp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nAttribute = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	bp = (BOOL*)&buf[i];
+- 	bForce = ntohl(*bp);
+- 	i += sizeof(BOOL);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Create(nUnit, nKey, pNamests, pFcb, nAttribute, bForce);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4A - ファイルオープン
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Open(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::namests_t *pNamests;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pNamests = (Human68k::namests_t*)&buf[i];
+- 	i += sizeof(Human68k::namests_t);
+- 
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Open(nUnit, nKey, pNamests, pFcb);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4B - ファイルクローズ
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Close(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Close(nUnit, nKey, pFcb);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4C - ファイル読み込み
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Read(BYTE *buf)
+- {
+- 	DWORD nKey;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD nSize;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 	
+- 	dp = (DWORD*)&buf[i];
+- 	nSize = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Read(nKey, pFcb, fsopt, nSize);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- 
+- 	fsoptlen = fsresult;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4D - ファイル書き込み
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Write(BYTE *buf)
+- {
+- 	DWORD nKey;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD nSize;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nSize = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Write(nKey, pFcb, fsopt, nSize);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4E - ファイルシーク
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Seek(BYTE *buf)
+- {
+- 	DWORD nKey;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD nMode;
+- 	int nOffset;
+- 	DWORD *dp;
+- 	int *ip;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nMode = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	ip = (int*)&buf[i];
+- 	nOffset = ntohl(*ip);
+- 	i += sizeof(int);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->Seek(nKey, pFcb, nMode, nOffset);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $4F - ファイル時刻取得/設定
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_TimeStamp(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nKey;
+- 	Human68k::fcb_t *pFcb;
+- 	DWORD nHumanTime;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nKey = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pFcb = (Human68k::fcb_t*)&buf[i];
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nHumanTime = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pFcb->fileptr = ntohl(pFcb->fileptr);
+- 	pFcb->mode = ntohs(pFcb->mode);
+- 	pFcb->time = ntohs(pFcb->time);
+- 	pFcb->date = ntohs(pFcb->date);
+- 	pFcb->size = ntohl(pFcb->size);
+- 
+- 	fsresult = fs->TimeStamp(nUnit, nKey, pFcb, nHumanTime);
+- 
+- 	pFcb->fileptr = htonl(pFcb->fileptr);
+- 	pFcb->mode = htons(pFcb->mode);
+- 	pFcb->time = htons(pFcb->time);
+- 	pFcb->date = htons(pFcb->date);
+- 	pFcb->size = htonl(pFcb->size);
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pFcb, sizeof(Human68k::fcb_t));
+- 	i += sizeof(Human68k::fcb_t);
+- 
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $50 - 容量取得
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_GetCapacity(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::capacity_t cap;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	fsresult = fs->GetCapacity(nUnit, &cap);
+- 
+- 	cap.freearea = htons(cap.freearea);
+- 	cap.clusters = htons(cap.clusters);
+- 	cap.sectors = htons(cap.sectors);
+- 	cap.bytes = htons(cap.bytes);
+- 
+- 	memcpy(fsout, &cap, sizeof(Human68k::capacity_t));
+- 	fsoutlen = sizeof(Human68k::capacity_t);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $51 - ドライブ状態検査/制御
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_CtrlDrive(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::ctrldrive_t *pCtrlDrive;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	pCtrlDrive = (Human68k::ctrldrive_t*)&buf[i];
+- 	i += sizeof(Human68k::ctrldrive_t);
+- 	
+- 	fsresult = fs->CtrlDrive(nUnit, pCtrlDrive);
+- 
+- 	memcpy(fsout, pCtrlDrive, sizeof(Human68k::ctrldrive_t));
+- 	fsoutlen = sizeof(Human68k::ctrldrive_t);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $52 - DPB取得
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_GetDPB(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	Human68k::dpb_t dpb;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->GetDPB(nUnit, &dpb);
+- 
+- 	dpb.sector_size = htons(dpb.sector_size);
+- 	dpb.fat_sector = htons(dpb.fat_sector);
+- 	dpb.file_max = htons(dpb.file_max);
+- 	dpb.data_sector = htons(dpb.data_sector);
+- 	dpb.cluster_max = htons(dpb.cluster_max);
+- 	dpb.root_sector = htons(dpb.root_sector);
+- 
+- 	memcpy(fsout, &dpb, sizeof(Human68k::dpb_t));
+- 	fsoutlen = sizeof(Human68k::dpb_t);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $53 - セクタ読み込み
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_DiskRead(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nSector;
+- 	DWORD nSize;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nSector = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nSize = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->DiskRead(nUnit, fsout, nSector, nSize);
+- 	fsoutlen = 0x200;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $54 - セクタ書き込み
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_DiskWrite(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->DiskWrite(nUnit);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $55 - IOCTRL
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Ioctrl(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD nFunction;
+- 	Human68k::ioctrl_t *pIoctrl;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	dp = (DWORD*)&buf[i];
+- 	nFunction = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 
+- 	pIoctrl = (Human68k::ioctrl_t*)&buf[i];
+- 	i += sizeof(Human68k::ioctrl_t);
+- 
+- 	switch (nFunction) {
+- 		case 2:
+- 		case -2:
+- 			pIoctrl->param = htonl(pIoctrl->param);
+- 			break;
+- 	}
+- 
+- 	fsresult = fs->Ioctrl(nUnit, nFunction, pIoctrl);
+- 
+- 	switch (nFunction) {
+- 		case 0:
+- 			pIoctrl->media = htons(pIoctrl->media);
+- 			break;
+- 		case 1:
+- 		case -3:
+- 			pIoctrl->param = htonl(pIoctrl->param);
+- 			break;
+- 	}
+- 
+- 	i = 0;
+- 	memcpy(&fsout[i], pIoctrl, sizeof(Human68k::ioctrl_t));
+- 	i += sizeof(Human68k::ioctrl_t);
+- 	fsoutlen = i;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $56 - フラッシュ
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Flush(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->Flush(nUnit);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $57 - メディア交換チェック
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_CheckMedia(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->CheckMedia(nUnit);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //  $58 - 排他制御
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SCSIBR::FS_Lock(BYTE *buf)
+- {
+- 	DWORD nUnit;
+- 	DWORD *dp;
+- 	int i;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fs);
+- 	ASSERT(buf);
+- 
+- 	i = 0;
+- 	dp = (DWORD*)buf;
+- 	nUnit = ntohl(*dp);
+- 	i += sizeof(DWORD);
+- 	
+- 	fsresult = fs->Lock(nUnit);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	ファイルシステム読み込み(結果コード)
+- //
+- //---------------------------------------------------------------------------
+- int FASTCALL SCSIBR::ReadFsResult(BYTE *buf)
+- {
+- 	DWORD *dp;
+- 
+- 	ASSERT(this);
+- 	ASSERT(buf);
+- 
+- 	dp = (DWORD*)buf;
+- 	*dp = htonl(fsresult);
+- 	return sizeof(DWORD);
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	ファイルシステム読み込み(返却データ)
+- //
+- //---------------------------------------------------------------------------
+- int FASTCALL SCSIBR::ReadFsOut(BYTE *buf)
+- {
+- 	ASSERT(this);
+- 	ASSERT(buf);
+  
+! 	memcpy(buf, fsout, fsoutlen);
+! 	return fsoutlen;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	Read file system (return option data)
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL SCSIBR::ReadFsOpt(BYTE *buf)
+  {
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	memcpy(buf, fsopt, fsoptlen);
+! 	return fsoptlen;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Write file system
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL SCSIBR::WriteFs(int func, BYTE *buf)
+! {
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	fsresult = FS_FATAL_INVALIDCOMMAND;
+! 	fsoutlen = 0;
+! 	fsoptlen = 0;
+! 
+! 	// Branch commands
+! 	func &= 0x1f;
+! 	switch (func) {
+! 		case 0x00: return FS_InitDevice(buf);	// $40 - Start device
+! 		case 0x01: return FS_CheckDir(buf);		// $41 - Check directory
+! 		case 0x02: return FS_MakeDir(buf);		// $42 - Create directory
+! 		case 0x03: return FS_RemoveDir(buf);	// $43 - Delete directory
+! 		case 0x04: return FS_Rename(buf);		// $44 - Rename file
+! 		case 0x05: return FS_Delete(buf);		// $45 - Delete file
+! 		case 0x06: return FS_Attribute(buf);	// $46 - Get and set file attributes
+! 		case 0x07: return FS_Files(buf);		// $47 - Search file
+! 		case 0x08: return FS_NFiles(buf);		// $48 - Search next file
+! 		case 0x09: return FS_Create(buf);		// $49 - Create file
+! 		case 0x0A: return FS_Open(buf);			// $4A - Open file
+! 		case 0x0B: return FS_Close(buf);		// $4B - Close file
+! 		case 0x0C: return FS_Read(buf);			// $4C - Read file
+! 		case 0x0D: return FS_Write(buf);		// $4D - Write file
+! 		case 0x0E: return FS_Seek(buf);			// $4E - Seek file
+! 		case 0x0F: return FS_TimeStamp(buf);	// $4F - Get and set file timestamp
+! 		case 0x10: return FS_GetCapacity(buf);	// $50 - Get capacity
+! 		case 0x11: return FS_CtrlDrive(buf);	// $51 - Control and check status of drive
+! 		case 0x12: return FS_GetDPB(buf);		// $52 - Get DPB
+! 		case 0x13: return FS_DiskRead(buf);		// $53 - Read sector
+! 		case 0x14: return FS_DiskWrite(buf);	// $54 - Write sector
+! 		case 0x15: return FS_Ioctrl(buf);		// $55 - IOCTRL
+! 		case 0x16: return FS_Flush(buf);		// $56 - Flush
+! 		case 0x17: return FS_CheckMedia(buf);	// $57 - Media change check
+! 		case 0x18: return FS_Lock(buf);			// $58 - Mutual exclusion
+  	}
+- }
+  
+! //---------------------------------------------------------------------------
+! //
+! //	File system write (input option data)
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL SCSIBR::WriteFsOpt(BYTE *buf, int num)
+! {
+! 	ASSERT(this);
+! 
+! 	memcpy(fsopt, buf, num);
+  }
+  
+  //===========================================================================
+  //
+  //	SASI device
+--- 4378,4415 ----
+  	len <<= 8;
+  	len |= cdb[7];
+  	len <<= 8;
+  	len |= cdb[8];
+  
+! 	// Type check
+! 	if (type < 0 || type > 7) {
+! 		return -1;
+  	}
+  
+! 	// Callback registration check
+! 	if (!pMsgFunc[type]) {
+! 		return -1;
+  	}
+  
+! 	// Callback
+! 	return pMsgFunc[type](FALSE, func, phase, len, buf);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	Register message handler
+  //
+  //---------------------------------------------------------------------------
+! void FASTCALL SCSIBR::SetMsgFunc(int type, MsgFunc f)
+  {
+! 	// Type check
+! 	if (type < 0 || type > 7) {
+! 		return;
+  	}
+  
+! 	// Handler record
+! 	pMsgFunc[type] = f;
+  }
+  
+  //===========================================================================
+  //
+  //	SASI device
+***************
+*** 6004,6036 ****
+  //---------------------------------------------------------------------------
+  //
+  //	コンストラクタ
+  //
+  //---------------------------------------------------------------------------
+- #ifdef RASCSI
+  SASIDEV::SASIDEV()
+- #else
+- SASIDEV::SASIDEV(Device *dev)
+- #endif	// RASCSI
+  {
+  	int i;
+  
+- #ifndef RASCSI
+- 	// ホストデバイスを記憶
+- 	host = dev;
+- #endif	// RASCSI
+- 
+  	// Work init
+  	ctrl.phase = BUS::busfree;
+  	ctrl.id = -1;
+  	ctrl.bus = NULL;
+  	memset(ctrl.cmd, 0x00, sizeof(ctrl.cmd));
+  	ctrl.status = 0x00;
+  	ctrl.message = 0x00;
+! #ifdef RASCSI
+  	ctrl.execstart = 0;
+! #endif	// RASCSI
+  	ctrl.bufsize = 0x800;
+  	ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	memset(ctrl.buffer, 0x00, ctrl.bufsize);
+  	ctrl.blocks = 0;
+  	ctrl.next = 0;
+--- 4419,4442 ----
+  //---------------------------------------------------------------------------
+  //
+  //	Constructor
+  //
+  //---------------------------------------------------------------------------
+  SASIDEV::SASIDEV()
+  {
+  	int i;
+  
+  	// Work init
+  	ctrl.phase = BUS::busfree;
+  	ctrl.id = -1;
+  	ctrl.bus = NULL;
+  	memset(ctrl.cmd, 0x00, sizeof(ctrl.cmd));
+  	ctrl.status = 0x00;
+  	ctrl.message = 0x00;
+! #if USE_WAIT_CTRL == 1
+  	ctrl.execstart = 0;
+! #endif	// USE_WAIT_CTRL
+  	ctrl.bufsize = 0x800;
+  	ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	memset(ctrl.buffer, 0x00, ctrl.bufsize);
+  	ctrl.blocks = 0;
+  	ctrl.next = 0;
+***************
+*** 6066,6083 ****
+  {
+  	int i;
+  
+  	ASSERT(this);
+  
+  	// Work init
+  	memset(ctrl.cmd, 0x00, sizeof(ctrl.cmd));
+  	ctrl.phase = BUS::busfree;
+  	ctrl.status = 0x00;
+  	ctrl.message = 0x00;
+! #ifdef RASCSI
+  	ctrl.execstart = 0;
+! #endif	// RASCSI
+  	memset(ctrl.buffer, 0x00, ctrl.bufsize);
+  	ctrl.blocks = 0;
+  	ctrl.next = 0;
+  	ctrl.offset = 0;
+  	ctrl.length = 0;
+--- 4472,4493 ----
+  {
+  	int i;
+  
+  	ASSERT(this);
+  
++ #if defined(DISK_LOG)
++ 		Log(Log::Normal, "Device reset");
++ #endif	// DISK_LOG
++ 
+  	// Work init
+  	memset(ctrl.cmd, 0x00, sizeof(ctrl.cmd));
+  	ctrl.phase = BUS::busfree;
+  	ctrl.status = 0x00;
+  	ctrl.message = 0x00;
+! #if USE_WAIT_CTRL == 1
+  	ctrl.execstart = 0;
+! #endif	// USE_WAIT_CTRL
+  	memset(ctrl.buffer, 0x00, ctrl.bufsize);
+  	ctrl.blocks = 0;
+  	ctrl.next = 0;
+  	ctrl.offset = 0;
+  	ctrl.length = 0;
+***************
+*** 6088,6176 ****
+  			ctrl.unit[i]->Reset();
+  		}
+  	}
+  }
+  
+- #ifndef RASCSI
+- //---------------------------------------------------------------------------
+- //
+- //	セーブ
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL SASIDEV::Save(Fileio *fio, int /*ver*/)
+- {
+- 	DWORD sz;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 
+- 	// サイズをセーブ
+- 	sz = 2120;
+- 	if (!fio->Write(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 
+- 	// 実体をセーブ
+- 	PROP_EXPORT(fio, ctrl.phase);
+- 	PROP_EXPORT(fio, ctrl.id);
+- 	PROP_EXPORT(fio, ctrl.cmd);
+- 	PROP_EXPORT(fio, ctrl.status);
+- 	PROP_EXPORT(fio, ctrl.message);
+- 	if (!fio->Write(ctrl.buffer, 0x800)) {
+- 		return FALSE;
+- 	}
+- 	PROP_EXPORT(fio, ctrl.blocks);
+- 	PROP_EXPORT(fio, ctrl.next);
+- 	PROP_EXPORT(fio, ctrl.offset);
+- 	PROP_EXPORT(fio, ctrl.length);
+- 
+- 	return TRUE;
+- }
+- 
+- //---------------------------------------------------------------------------
+- //
+- //	ロード
+- //
+- //---------------------------------------------------------------------------
+- BOOL FASTCALL SASIDEV::Load(Fileio *fio, int ver)
+- {
+- 	DWORD sz;
+- 
+- 	ASSERT(this);
+- 	ASSERT(fio);
+- 
+- 	// version3.11より前はセーブしていない
+- 	if (ver <= 0x0311) {
+- 		return TRUE;
+- 	}
+- 
+- 	// サイズをロード、照合
+- 	if (!fio->Read(&sz, sizeof(sz))) {
+- 		return FALSE;
+- 	}
+- 	if (sz != 2120) {
+- 		return FALSE;
+- 	}
+- 
+- 	// 実体をロード
+- 	PROP_IMPORT(fio, ctrl.phase);
+- 	PROP_IMPORT(fio, ctrl.id);
+- 	PROP_IMPORT(fio, ctrl.cmd);
+- 	PROP_IMPORT(fio, ctrl.status);
+- 	PROP_IMPORT(fio, ctrl.message);
+- 	if (!fio->Read(ctrl.buffer, 0x800)) {
+- 		return FALSE;
+- 	}
+- 	PROP_IMPORT(fio, ctrl.blocks);
+- 	PROP_IMPORT(fio, ctrl.next);
+- 	PROP_IMPORT(fio, ctrl.offset);
+- 	PROP_IMPORT(fio, ctrl.length);
+- 
+- 	return TRUE;
+- }
+- #endif	// RASCSI
+- 
+  //---------------------------------------------------------------------------
+  //
+  //	コントローラ接続
+  //
+  //---------------------------------------------------------------------------
+--- 4498,4507 ----
+***************
+*** 6386,6395 ****
+--- 4717,4727 ----
+  
+  	// Phase check
+  	if (ctrl.phase != BUS::selection) {
+  		// Disable if IDs don't match
+  		id = 1 << ctrl.id;
++ 		ctrl.bus->Aquire();
+  		if ((ctrl.bus->GetDAT() & id) == 0) {
+  			return;
+  		}
+  
+  		// 有効なユニットが無ければ終了
+***************
+*** 6421,6434 ****
+  //	Command phase
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Command()
+  {
+! #ifdef RASCSI
+  	int count;
+  	int i;
+! #endif	// RASCSI
+  
+  	ASSERT(this);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::command) {
+--- 4753,4766 ----
+  //	Command phase
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Command()
+  {
+! #if USE_BURST_BUS == 1
+  	int count;
+  	int i;
+! #endif	// USE_BURST_BUS
+  
+  	ASSERT(this);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::command) {
+***************
+*** 6448,6458 ****
+  		// Data transfer is 6 byte by 1 block
+  		ctrl.offset = 0;
+  		ctrl.length = 6;
+  		ctrl.blocks = 1;
+  
+! #ifdef RASCSI
+  		// コマンド受信ハンドシェイク(最初のコマンドで自動で10バイト受信する)
+  		count = ctrl.bus->CommandHandShake(ctrl.buffer);
+  	
+  		// 1バイトも受信できなければステータスフェーズへ移行
+  		if (count == 0) {
+--- 4780,4790 ----
+  		// Data transfer is 6 byte by 1 block
+  		ctrl.offset = 0;
+  		ctrl.length = 6;
+  		ctrl.blocks = 1;
+  
+! #if USE_BURST_BUS == 1
+  		// コマンド受信ハンドシェイク(最初のコマンドで自動で10バイト受信する)
+  		count = ctrl.bus->CommandHandShake(ctrl.buffer);
+  	
+  		// 1バイトも受信できなければステータスフェーズへ移行
+  		if (count == 0) {
+***************
+*** 6483,6496 ****
+  		// 実行フェーズ
+  		Execute();
+  #else
+  		// コマンドを要求
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
+- #endif	// RASCSI
+  	}
+! #ifndef RASCSI
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+  			Receive();
+--- 4815,4829 ----
+  		// 実行フェーズ
+  		Execute();
+  #else
+  		// コマンドを要求
+  		ctrl.bus->SetREQ(TRUE);
++ #endif	// USE_BURST_BUS
+  		return;
+  	}
+! 
+! #if USE_BURST_BUS != 1
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+  			Receive();
+***************
+*** 6499,6509 ****
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	実行フェーズ
+--- 4832,4842 ----
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	実行フェーズ
+***************
+*** 6521,6533 ****
+  	ctrl.phase = BUS::execute;
+  
+  	// データ転送のための初期化
+  	ctrl.offset = 0;
+  	ctrl.blocks = 1;
+! #ifdef RASCSI
+! 	ctrl.execstart = SysTimer::GetTimerLow();
+! #endif	// RASCSI
+  
+  	// コマンド別処理
+  	switch (ctrl.cmd[0]) {
+  		// TEST UNIT READY
+  		case 0x00:
+--- 4854,4866 ----
+  	ctrl.phase = BUS::execute;
+  
+  	// データ転送のための初期化
+  	ctrl.offset = 0;
+  	ctrl.blocks = 1;
+! #if USE_WAIT_CTRL == 1
+! 	ctrl.execstart = ::GetTimeUs();
+! #endif	// USE_WAIT_CTRL
+  
+  	// コマンド別処理
+  	switch (ctrl.cmd[0]) {
+  		// TEST UNIT READY
+  		case 0x00:
+***************
+*** 6595,6627 ****
+  //	ステータスフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Status()
+  {
+! #ifdef RASCSI
+! 	DWORD min_exec_time;
+  	DWORD time;
+! #endif	// RASCSI
+! 
+  	ASSERT(this);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::status) {
+  
+! #ifdef RASCSI
+  		// Shortest execution time
+  		if (ctrl.execstart > 0) {
+! 			min_exec_time = IsSASI() ? min_exec_time_sasi : min_exec_time_scsi;
+! 			time = SysTimer::GetTimerLow() - ctrl.execstart;
+  			if (time < min_exec_time) {
+! 				SysTimer::SleepUsec(min_exec_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		} else {
+! 			SysTimer::SleepUsec(5);
+  		}
+! #endif	// RASCSI
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "ステータスフェーズ");
+  #endif	// DISK_LOG
+  
+--- 4928,4958 ----
+  //	ステータスフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Status()
+  {
+! #if USE_WAIT_CTRL == 1
+  	DWORD time;
+! #endif	// USE_WAIT_CTRL
+  	ASSERT(this);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::status) {
+  
+! #if USE_WAIT_CTRL == 1
+  		// Shortest execution time
+  		if (ctrl.execstart > 0) {
+! 			time = ::GetTimeUs() - ctrl.execstart;
+  			if (time < min_exec_time) {
+! 				::SleepUs(min_exec_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		} else {
+! 			// Phase change time
+! 			::SleepUs(min_status_time);
+  		}
+! #endif	// USE_WAIT_CTRL
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "ステータスフェーズ");
+  #endif	// DISK_LOG
+  
+***************
+*** 6637,6661 ****
+  		ctrl.offset = 0;
+  		ctrl.length = 1;
+  		ctrl.blocks = 1;
+  		ctrl.buffer[0] = (BYTE)ctrl.status;
+  
+! #ifndef RASCSI
+  		// ステータスを要求
+  		ctrl.bus->SetDAT(ctrl.buffer[0]);
+  		ctrl.bus->SetREQ(TRUE);
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "ステータスフェーズ $%02X", ctrl.status);
+  #endif	// DISK_LOG
+- #endif	// RASCSI
+  		return;
+  	}
+  
+! #ifdef RASCSI
+  	// Send
+! 	Send();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+--- 4968,4992 ----
+  		ctrl.offset = 0;
+  		ctrl.length = 1;
+  		ctrl.blocks = 1;
+  		ctrl.buffer[0] = (BYTE)ctrl.status;
+  
+! #if USE_BURST_BUS != 1
+  		// ステータスを要求
+  		ctrl.bus->SetDAT(ctrl.buffer[0]);
+  		ctrl.bus->SetREQ(TRUE);
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "ステータスフェーズ $%02X", ctrl.status);
+  #endif	// DISK_LOG
+  		return;
++ #endif	// USE_BURST_BUS
+  	}
+  
+! #if USE_BURST_BUS == 1
+  	// 送信
+! 	SendBurst();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+***************
+*** 6665,6675 ****
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	メッセージインフェーズ
+--- 4996,5006 ----
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	メッセージインフェーズ
+***************
+*** 6697,6721 ****
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #ifndef RASCSI
+  		// メッセージを要求
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+  		ctrl.bus->SetREQ(TRUE);
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "メッセージインフェーズ $%02X", ctrl.buffer[ctrl.offset]);
+  #endif	// DISK_LOG
+- #endif	// RASCSI
+  		return;
+  	}
+  
+! #ifdef RASCSI
+  	// 送信
+! 	Send();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+--- 5028,5052 ----
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #if USE_BURST_BUS != 1
+  		// メッセージを要求
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+  		ctrl.bus->SetREQ(TRUE);
+  
+  #if defined(DISK_LOG)
+  		Log(Log::Normal, "メッセージインフェーズ $%02X", ctrl.buffer[ctrl.offset]);
+  #endif	// DISK_LOG
+  		return;
++ #endif	// USE_BURST_BUS
+  	}
+  
+! #if USE_BURST_BUS == 1
+  	// 送信
+! 	SendBurst();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+***************
+*** 6725,6766 ****
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データインフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::DataIn()
+  {
+! #ifdef RASCSI
+! 	DWORD min_exec_time;
+  	DWORD time;
+! #endif	// RASCSI
+  
+  	ASSERT(this);
+  	ASSERT(ctrl.length >= 0);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::datain) {
+  
+! #ifdef RASCSI
+  		// 最小実行時間
+  		if (ctrl.execstart > 0) {
+! 			min_exec_time = IsSASI() ? min_exec_time_sasi : min_exec_time_scsi;
+! 			time = SysTimer::GetTimerLow() - ctrl.execstart;
+! 			if (time < min_exec_time) {
+! 				SysTimer::SleepUsec(min_exec_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		}
+! #endif	// RASCSI
+  
+  		// レングス0なら、ステータスフェーズへ
+  		if (ctrl.length == 0) {
+  			Status();
+  			return;
+--- 5056,5095 ----
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データインフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::DataIn()
+  {
+! #if USE_WAIT_CTRL == 1
+  	DWORD time;
+! #endif	// USE_WAIT_CTRL
+  
+  	ASSERT(this);
+  	ASSERT(ctrl.length >= 0);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::datain) {
+  
+! #if USE_WAIT_CTRL == 1
+  		// 最小実行時間
+  		if (ctrl.execstart > 0) {
+! 			time = ::GetTimeUs() - ctrl.execstart;
+! 			if (time < min_data_time) {
+! 				::SleepUs(min_data_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		}
+! #endif	// USE_WAIT_CTRL
+  
+  		// レングス0なら、ステータスフェーズへ
+  		if (ctrl.length == 0) {
+  			Status();
+  			return;
+***************
+*** 6781,6803 ****
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #ifndef RASCSI
+  		// データを設定
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+  
+  		// データを要求
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+! #ifdef RASCSI
+  	// 送信
+! 	Send();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+--- 5110,5132 ----
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #if USE_BURST_BUS != 1
+  		// データを設定
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+  
+  		// データを要求
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
++ #endif	// USE_BURST_BUS
+  	}
+  
+! #if USE_BURST_BUS == 1
+  	// 送信
+! 	SendBurst();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが受信した
+  		if (ctrl.bus->GetACK()) {
+***************
+*** 6807,6848 ****
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データアウトフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::DataOut()
+  {
+! #ifdef RASCSI
+! 	DWORD min_exec_time;
+  	DWORD time;
+! #endif	// RASCSI
+  
+  	ASSERT(this);
+  	ASSERT(ctrl.length >= 0);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::dataout) {
+  
+! #ifdef RASCSI
+  		// 最小実行時間
+  		if (ctrl.execstart > 0) {
+! 			min_exec_time = IsSASI() ? min_exec_time_sasi : min_exec_time_scsi;
+! 			time = SysTimer::GetTimerLow() - ctrl.execstart;
+! 			if (time < min_exec_time) {
+! 				SysTimer::SleepUsec(min_exec_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		}
+! #endif	// RASCSI
+  
+  		// レングス0なら、ステータスフェーズへ
+  		if (ctrl.length == 0) {
+  			Status();
+  			return;
+--- 5136,5175 ----
+  		// イニシエータが次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			Send();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データアウトフェーズ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::DataOut()
+  {
+! #if USE_WAIT_CTRL == 1
+  	DWORD time;
+! #endif	// USE_WAIT_CTRL
+  
+  	ASSERT(this);
+  	ASSERT(ctrl.length >= 0);
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::dataout) {
+  
+! #if USE_WAIT_CTRL == 1
+  		// 最小実行時間
+  		if (ctrl.execstart > 0) {
+! 			time = ::GetTimeUs() - ctrl.execstart;
+! 			if (time < min_data_time) {
+! 				::SleepUs(min_data_time - time);
+  			}
+  			ctrl.execstart = 0;
+  		}
+! #endif	// USE_WAIT_CTRL
+  
+  		// レングス0なら、ステータスフェーズへ
+  		if (ctrl.length == 0) {
+  			Status();
+  			return;
+***************
+*** 6863,6882 ****
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #ifndef	RASCSI
+  		// データを要求
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+! #ifdef	RASCSI
+  	// 受信
+! 	Receive();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+--- 5190,5209 ----
+  		// length, blocksは設定済み
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.blocks > 0);
+  		ctrl.offset = 0;
+  
+! #if USE_BURST_BUS != 1
+  		// データを要求
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
++ #endif	// USE_BURST_BUS
+  	}
+  
+! #if USE_BURST_BUS == 1
+  	// 受信
+! 	ReceiveBurst();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+***************
+*** 6886,6896 ****
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	共通エラー
+--- 5213,5223 ----
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	共通エラー
+***************
+*** 7357,7393 ****
+  //	データ送信
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Send()
+  {
+- #ifdef RASCSI
+- 	int len;
+- #endif	// RASCSI
+  	BOOL result;
+  
+  	ASSERT(this);
+  	ASSERT(!ctrl.bus->GetREQ());
+  	ASSERT(ctrl.bus->GetIO());
+  
+- #ifdef RASCSI
+- 	// レングス!=0なら送信
+- 	if (ctrl.length != 0) {
+- 		len = ctrl.bus->SendHandShake(
+- 			&ctrl.buffer[ctrl.offset], ctrl.length);
+- 
+- 		// 全て送信できなければステータスフェーズへ移行
+- 		if (len != (int)ctrl.length) {
+- 			Error();
+- 			return;
+- 		}
+- 
+- 		// オフセットとレングス
+- 		ctrl.offset += ctrl.length;
+- 		ctrl.length = 0;
+- 		return;
+- 	}
+- #else
+  	// オフセットとレングス
+  	ASSERT(ctrl.length >= 1);
+  	ctrl.offset++;
+  	ctrl.length--;
+  
+--- 5684,5699 ----
+***************
+*** 7395,7418 ****
+  	if (ctrl.length != 0) {
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
+  	}
+- #endif	// RASCSI
+  
+  	// ブロック減算、リザルト初期化
+  	ctrl.blocks--;
+  	result = TRUE;
+  
+  	// データ引き取り後の処理(リード/データインのみ)
+  	if (ctrl.phase == BUS::datain) {
+  		if (ctrl.blocks != 0) {
+  			// 次のバッファを設定(offset, lengthをセットすること)
+  			result = XferIn(ctrl.buffer);
+- #ifndef RASCSI
+  			ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+- #endif	// RASCSI
+  		}
+  	}
+  
+  	// リザルトFALSEなら、ステータスフェーズへ移行
+  	if (!result) {
+--- 5701,5721 ----
+***************
+*** 7422,7435 ****
+  
+  	// ブロック!=0なら送信継続
+  	if (ctrl.blocks != 0){
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.offset == 0);
+- #ifndef RASCSI
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+  	// 次フェーズに移動
+  	switch (ctrl.phase) {
+--- 5725,5736 ----
+***************
+*** 7459,7469 ****
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+  
+- #ifndef	RASCSI
+  //---------------------------------------------------------------------------
+  //
+  //	データ送信継続
+  //
+  //---------------------------------------------------------------------------
+--- 5760,5769 ----
+***************
+*** 7481,7493 ****
+  	// バッファにデータがあれば先に設定する
+  	if (ctrl.length > 1) {
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset + 1]);
+  	}
+  }
+- #endif	// RASCSI
+  
+- #ifndef RASCSI
+  //---------------------------------------------------------------------------
+  //
+  //	データ受信
+  //
+  //---------------------------------------------------------------------------
+--- 5781,5791 ----
+***************
+*** 7500,7509 ****
+--- 5798,5808 ----
+  	// REQが上がっている
+  	ASSERT(ctrl.bus->GetREQ());
+  	ASSERT(!ctrl.bus->GetIO());
+  
+  	// データ取得
++ 	ctrl.bus->Aquire();
+  	data = (DWORD)ctrl.bus->GetDAT();
+  
+  	// ターゲットが操作する信号線
+  	ctrl.bus->SetREQ(FALSE);
+  
+***************
+*** 7533,7590 ****
+  		default:
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+- #endif	// RASCSI
+  
+- #ifdef RASCSI
+- //---------------------------------------------------------------------------
+- //
+- //	データ受信
+- //
+- //---------------------------------------------------------------------------
+- void FASTCALL SASIDEV::Receive()
+- #else
+  //---------------------------------------------------------------------------
+  //
+  //	データ受信継続
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::ReceiveNext()
+- #endif	// RASCSI
+  {
+- #ifdef RASCSI
+- 	int len;
+- #endif	// RASCSI
+  	BOOL result;
+  
+  	ASSERT(this);
+  
+  	// REQが下がっていること
+  	ASSERT(!ctrl.bus->GetREQ());
+  	ASSERT(!ctrl.bus->GetIO());
+  
+- #ifdef RASCSI
+- 	// レングス!=0なら受信
+- 	if (ctrl.length != 0) {
+- 		// 受信
+- 		len = ctrl.bus->ReceiveHandShake(
+- 			&ctrl.buffer[ctrl.offset], ctrl.length);
+- 
+- 		// 全て受信できなければステータスフェーズへ移行
+- 		if (len != (int)ctrl.length) {
+- 			Error();
+- 			return;
+- 		}
+- 
+- 		// オフセットとレングス
+- 		ctrl.offset += ctrl.length;
+- 		ctrl.length = 0;
+- 		return;
+- 	}
+- #else
+  	// オフセットとレングス
+  	ASSERT(ctrl.length >= 1);
+  	ctrl.offset++;
+  	ctrl.length--;
+  
+--- 5832,5857 ----
+***************
+*** 7592,7602 ****
+  	if (ctrl.length != 0) {
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
+  	}
+- #endif	// RASCSI
+  
+  	// ブロック減算、リザルト初期化
+  	ctrl.blocks--;
+  	result = TRUE;
+  
+--- 5859,5868 ----
+***************
+*** 7619,7644 ****
+  
+  	// ブロック!=0なら受信継続
+  	if (ctrl.blocks != 0){
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.offset == 0);
+- #ifndef RASCSI
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+  	// 次フェーズに移動
+  	switch (ctrl.phase) {
+- #ifndef RASCSI
+  		// コマンドフェーズ
+  		case BUS::command:
+  			// 実行フェーズ
+  			Execute();
+  			break;
+- #endif	// RASCSI
+  
+  		// データアウトフェーズ
+  		case BUS::dataout:
+  			// フラッシュ
+  			FlushUnit();
+--- 5885,5906 ----
+***************
+*** 7652,7661 ****
+--- 5914,6089 ----
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+  
++ #if USE_BURST_BUS == 1
++ //---------------------------------------------------------------------------
++ //
++ //	Burst mode
++ //
++ //---------------------------------------------------------------------------
++ void FASTCALL SASIDEV::SendBurst()
++ {
++ 	int len;
++ 	BOOL result;
++ 
++ 	ASSERT(this);
++ 	ASSERT(!ctrl.bus->GetREQ());
++ 	ASSERT(ctrl.bus->GetIO());
++ 
++ 	// If length !=0 then send
++ 	if (ctrl.length != 0) {
++ 		len = ctrl.bus->SendHandShake(ctrl.buffer, ctrl.length);
++ 
++ 		// Transition of status phase if all cannot be sent
++ 		if (len != (int)ctrl.length) {
++ 			Error();
++ 			return;
++ 		}
++ 
++ 		// Offset and length
++ 		ctrl.offset += ctrl.length;
++ 		ctrl.length = 0;
++ 		return;
++ 	}
++ 
++ 	// Subtract blocks, initialize result
++ 	ctrl.blocks--;
++ 	result = TRUE;
++ 
++ 	// Processing after receiving data (only read and detain)
++ 	if (ctrl.phase == BUS::datain) {
++ 		if (ctrl.blocks != 0) {
++ 			// 次のバッファを設定(offset, lengthをセットすること)
++ 			result = XferIn(ctrl.buffer);
++ 		}
++ 	}
++ 
++ 	// If result is FALSE, transition to status phase
++ 	if (!result) {
++ 		Error();
++ 		return;
++ 	}
++ 
++ 	// If block != 0 continue transfer
++ 	if (ctrl.blocks != 0){
++ 		ASSERT(ctrl.length > 0);
++ 		ASSERT(ctrl.offset == 0);
++ 		return;
++ 	}
++ 
++ 	// Transition to next phase
++ 	switch (ctrl.phase) {
++ 		// Message in phase
++ 		case BUS::msgin:
++ 			// Bus free phase
++ 			BusFree();
++ 			break;
++ 
++ 		// Data in phase
++ 		case BUS::datain:
++ 			// Status phase
++ 			Status();
++ 			break;
++ 
++ 		// Status phase
++ 		case BUS::status:
++ 			// Message in phase
++ 			ctrl.length = 1;
++ 			ctrl.blocks = 1;
++ 			ctrl.buffer[0] = (BYTE)ctrl.message;
++ 			MsgIn();
++ 			break;
++ 
++ 		// Other (shouldn't reach here)
++ 		default:
++ 			ASSERT(FALSE);
++ 			break;
++ 	}
++ }
++ 
++ //---------------------------------------------------------------------------
++ //
++ //	Receive data
++ //
++ //---------------------------------------------------------------------------
++ void FASTCALL SASIDEV::ReceiveBurst()
++ {
++ 	int len;
++ 	BOOL result;
++ 
++ 	ASSERT(this);
++ 
++ 	// REQ has dropped
++ 	ASSERT(!ctrl.bus->GetREQ());
++ 	ASSERT(!ctrl.bus->GetIO());
++ 
++ 	// If length != 0 then receive
++ 	if (ctrl.length != 0) {
++ 		// Receive
++ 		len = ctrl.bus->ReceiveHandShake(ctrl.buffer, ctrl.length);
++ 
++ 		// Transition to status phase if cannot receive everything
++ 		if (len != (int)ctrl.length) {
++ 			Error();
++ 			return;
++ 		}
++ 
++ 		// Offset and length
++ 		ctrl.offset += ctrl.length;
++ 		ctrl.length = 0;
++ 		return;
++ 	}
++ 
++ 	// Subtract blocks, initialize result
++ 	ctrl.blocks--;
++ 	result = TRUE;
++ 
++ 	// Data out phase processing
++ 	if (ctrl.phase == BUS::dataout) {
++ 		if (ctrl.blocks == 0) {
++ 			// Finish with this buffer
++ 			result = XferOut(FALSE);
++ 		} else {
++ 			// Continue with next buffer (set offset, length)
++ 			result = XferOut(TRUE);
++ 		}
++ 	}
++ 
++ 	// If result is FALSE, transition to status phase
++ 	if (!result) {
++ 		Error();
++ 		return;
++ 	}
++ 
++ 	// If block !=0 continue transfer
++ 	if (ctrl.blocks != 0){
++ 		ASSERT(ctrl.length > 0);
++ 		ASSERT(ctrl.offset == 0);
++ 		return;
++ 	}
++ 
++ 	// Transition to next phase
++ 	switch (ctrl.phase) {
++ 		// Data out phase
++ 		case BUS::dataout:
++ 			// Flush
++ 			FlushUnit();
++ 
++ 			// Status phase
++ 			Status();
++ 			break;
++ 
++ 		// Other (shouldn't reach here)
++ 		default:
++ 			ASSERT(FALSE);
++ 			break;
++ 	}
++ }
++ #endif	// USE_BURST_BUS
++ 
+  //---------------------------------------------------------------------------
+  //
+  //	データ転送IN
+  //	※offset, lengthを再設定すること
+  //
+***************
+*** 7741,7752 ****
+  		// WRITE(10)
+  		case 0x2a:
+  			// ホストブリッジはSEND MESSAGE10に差し替える
+  			if (ctrl.unit[lun]->GetID() == MAKEID('S', 'C', 'B', 'R')) {
+  				bridge = (SCSIBR*)ctrl.unit[lun];
+! 				if (!bridge->SendMessage10(ctrl.cmd, ctrl.buffer)) {
+! 					// Write failed
+  					return FALSE;
+  				}
+  
+  				// 正常なら、ワーク設定
+  				ctrl.offset = 0;
+--- 6169,6180 ----
+  		// WRITE(10)
+  		case 0x2a:
+  			// ホストブリッジはSEND MESSAGE10に差し替える
+  			if (ctrl.unit[lun]->GetID() == MAKEID('S', 'C', 'B', 'R')) {
+  				bridge = (SCSIBR*)ctrl.unit[lun];
+! 				if (bridge->SendMessage10(ctrl.cmd, ctrl.buffer) <= 0) {
+! 					// Failed to send message
+  					return FALSE;
+  				}
+  
+  				// 正常なら、ワーク設定
+  				ctrl.offset = 0;
+***************
+*** 7833,7868 ****
+  //	ログ出力
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Log(Log::loglevel level, const char *format, ...)
+  {
+! #if !defined(BAREMETAL)
+  	char buffer[0x200];
+  	va_list args;
+  	va_start(args, format);
+  
+! #ifdef RASCSI
+! #ifndef DISK_LOG
+  	if (level == Log::Warning) {
+  		return;
+  	}
+! #endif	// DISK_LOG
+! #endif	// RASCSI
+  
+  	// フォーマット
+  	vsprintf(buffer, format, args);
+  
+  	// 可変長引数終了
+  	va_end(args);
+  
+  	// ログ出力
+- #ifdef RASCSI
+  	printf("%s\n", buffer);
+! #else
+! 	host->GetVM()->GetLog()->Format(level, host, buffer);
+! #endif	// RASCSI
+! #endif	// BAREMETAL
+  }
+  
+  //===========================================================================
+  //
+  //	SCSI デバイス
+--- 6261,6290 ----
+  //	ログ出力
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SASIDEV::Log(Log::loglevel level, const char *format, ...)
+  {
+! #if USE_LOG_OUTPUT > 0
+  	char buffer[0x200];
+  	va_list args;
+  	va_start(args, format);
+  
+! #ifndef DISK_LOG_WARNING
+  	if (level == Log::Warning) {
+  		return;
+  	}
+! #endif	// DISK_LOG_WARNING
+  
+  	// フォーマット
+  	vsprintf(buffer, format, args);
+  
+  	// 可変長引数終了
+  	va_end(args);
+  
+  	// ログ出力
+  	printf("%s\n", buffer);
+! #endif	// USE_LOG_OUTPUT
+  }
+  
+  //===========================================================================
+  //
+  //	SCSI デバイス
+***************
+*** 7872,7890 ****
+  //---------------------------------------------------------------------------
+  //
+  //	コンストラクタ
+  //
+  //---------------------------------------------------------------------------
+- #ifdef RASCSI
+  SCSIDEV::SCSIDEV() : SASIDEV()
+- #else
+- SCSIDEV::SCSIDEV(Device *dev) : SASIDEV(dev)
+- #endif
+  {
+! 	// Synchronized redirect work init
+  	scsi.syncenable = FALSE;
+! 	scsi.syncperiod = 50;
+  	scsi.syncoffset = 0;
+  	scsi.atnmsg = FALSE;
+  	scsi.msc = 0;
+  	memset(scsi.msb, 0x00, sizeof(scsi.msb));
+  }
+--- 6294,6312 ----
+  //---------------------------------------------------------------------------
+  //
+  //	コンストラクタ
+  //
+  //---------------------------------------------------------------------------
+  SCSIDEV::SCSIDEV() : SASIDEV()
+  {
+! 	// Init work
+! #if (USE_BURST_BUS == 1 && USE_SYNC_TRANS == 1)
+! 	scsi.syncenable = TRUE;
+! #else
+  	scsi.syncenable = FALSE;
+! #endif	// USE_BURST_BUS == 1 && USE_SYNC_TRANS == 1
+! 	scsi.syncperiod = 0;
+  	scsi.syncoffset = 0;
+  	scsi.atnmsg = FALSE;
+  	scsi.msc = 0;
+  	memset(scsi.msb, 0x00, sizeof(scsi.msb));
+  }
+***************
+*** 7897,7906 ****
+--- 6319,6335 ----
+  void FASTCALL SCSIDEV::Reset()
+  {
+  	ASSERT(this);
+  
+  	// ワーク初期化
++ #if (USE_BURST_BUS == 1 && USE_SYNC_TRANS == 1)
++ 	scsi.syncenable = TRUE;
++ #else
++ 	scsi.syncenable = FALSE;
++ #endif	// USE_BURST_BUS == 1 && USE_SYNC_TRANS == 1
++ 	scsi.syncperiod = 0;
++ 	scsi.syncoffset = 0;
+  	scsi.atnmsg = FALSE;
+  	scsi.msc = 0;
+  	memset(scsi.msb, 0x00, sizeof(scsi.msb));
+  
+  	// 基底クラス
+***************
+*** 8049,8058 ****
+--- 6478,6488 ----
+  
+  	// フェーズチェンジ
+  	if (ctrl.phase != BUS::selection) {
+  		// IDが一致していなければ無効
+  		id = 1 << ctrl.id;
++ 		ctrl.bus->Aquire();
+  		if ((ctrl.bus->GetDAT() & id) == 0) {
+  			return;
+  		}
+  
+  		// 有効なユニットが無ければ終了
+***************
+*** 8101,8113 ****
+  	ctrl.phase = BUS::execute;
+  
+  	// データ転送のための初期化
+  	ctrl.offset = 0;
+  	ctrl.blocks = 1;
+! #ifdef RASCSI
+! 	ctrl.execstart = SysTimer::GetTimerLow();
+! #endif	// RASCSI
+  
+  	// コマンド別処理
+  	switch (ctrl.cmd[0]) {
+  		// TEST UNIT READY
+  		case 0x00:
+--- 6531,6543 ----
+  	ctrl.phase = BUS::execute;
+  
+  	// データ転送のための初期化
+  	ctrl.offset = 0;
+  	ctrl.blocks = 1;
+! #if USE_WAIT_CTRL == 1
+! 	ctrl.execstart = ::GetTimeUs();
+! #endif	// USE_WAIT_CTRL
+  
+  	// コマンド別処理
+  	switch (ctrl.cmd[0]) {
+  		// TEST UNIT READY
+  		case 0x00:
+***************
+*** 8295,8314 ****
+  		// データ転送は1バイトx1ブロック
+  		ctrl.offset = 0;
+  		ctrl.length = 1;
+  		ctrl.blocks = 1;
+  
+! #ifndef RASCSI
+  		// メッセージを要求
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+! #ifdef RASCSI
+  	// 受信
+! 	Receive();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+--- 6725,6744 ----
+  		// データ転送は1バイトx1ブロック
+  		ctrl.offset = 0;
+  		ctrl.length = 1;
+  		ctrl.blocks = 1;
+  
+! #if USE_BURST_BUS == 0
+  		// メッセージを要求
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
++ #endif	// USE_BURST_BUS
+  	}
+  
+! #if USE_BURST_BUS == 1
+  	// 受信
+! 	ReceiveBurst();
+  #else
+  	// リクエスト中
+  	if (ctrl.bus->GetREQ()) {
+  		// イニシエータが送信した
+  		if (ctrl.bus->GetACK()) {
+***************
+*** 8318,8328 ****
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// RASCSI
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	共通エラー処理
+--- 6748,6758 ----
+  		// イニシエータに次を要求
+  		if (!ctrl.bus->GetACK()) {
+  			ReceiveNext();
+  		}
+  	}
+! #endif	// USE_BURST_BUS
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	共通エラー処理
+***************
+*** 8396,8411 ****
+  		}
+  	}
+  
+  	// ディスク側で処理(本来はコントローラで処理される)
+  	if (disk) {
+! #ifdef RASCSI
+! 		major = (DWORD)(RASCSI >> 8);
+! 		minor = (DWORD)(RASCSI & 0xff);
+! #else
+! 		host->GetVM()->GetVersion(major, minor);
+! #endif	// RASCSI
+  		ctrl.length =
+  			ctrl.unit[lun]->Inquiry(ctrl.cmd, ctrl.buffer, major, minor);
+  	} else {
+  		ctrl.length = 0;
+  	}
+--- 6826,6837 ----
+  		}
+  	}
+  
+  	// ディスク側で処理(本来はコントローラで処理される)
+  	if (disk) {
+! 		major = (DWORD)(DEFAULT_VERSION >> 8);
+! 		minor = (DWORD)(DEFAULT_VERSION & 0xff);
+  		ctrl.length =
+  			ctrl.unit[lun]->Inquiry(ctrl.cmd, ctrl.buffer, major, minor);
+  	} else {
+  		ctrl.length = 0;
+  	}
+***************
+*** 9151,9163 ****
+  		Error();
+  		return;
+  	}
+  
+  	// バッファの再確保(ブロック毎の転送ではないため)
+! 	if (ctrl.bufsize < 0x1000000) {
+  		free(ctrl.buffer);
+! 		ctrl.bufsize = 0x1000000;
+  		ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	}
+  
+  	// ドライブで処理する
+  	bridge = (SCSIBR*)ctrl.unit[lun];
+--- 7577,7589 ----
+  		Error();
+  		return;
+  	}
+  
+  	// バッファの再確保(ブロック毎の転送ではないため)
+! 	if (ctrl.bufsize < 0x2000000) {
+  		free(ctrl.buffer);
+! 		ctrl.bufsize = 0x2000000;
+  		ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	}
+  
+  	// ドライブで処理する
+  	bridge = (SCSIBR*)ctrl.unit[lun];
+***************
+*** 9200,9212 ****
+  		Error();
+  		return;
+  	}
+  
+  	// バッファの再確保(ブロック毎の転送ではないため)
+! 	if (ctrl.bufsize < 0x1000000) {
+  		free(ctrl.buffer);
+! 		ctrl.bufsize = 0x1000000;
+  		ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	}
+  
+  	// 転送量を設定
+  	ctrl.length = ctrl.cmd[6];
+--- 7626,7638 ----
+  		Error();
+  		return;
+  	}
+  
+  	// バッファの再確保(ブロック毎の転送ではないため)
+! 	if (ctrl.bufsize < 0x2000000) {
+  		free(ctrl.buffer);
+! 		ctrl.bufsize = 0x2000000;
+  		ctrl.buffer = (BYTE *)malloc(ctrl.bufsize);
+  	}
+  
+  	// 転送量を設定
+  	ctrl.length = ctrl.cmd[6];
+***************
+*** 9240,9276 ****
+  //	データ送信
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL SCSIDEV::Send()
+  {
+- #ifdef RASCSI
+- 	int len;
+- #endif	// RASCSI
+  	BOOL result;
+  
+  	ASSERT(this);
+  	ASSERT(!ctrl.bus->GetREQ());
+  	ASSERT(ctrl.bus->GetIO());
+  
+- #ifdef RASCSI
+- 	// レングス!=0なら送信
+- 	if (ctrl.length != 0) {
+- 		len = ctrl.bus->SendHandShake(
+- 			&ctrl.buffer[ctrl.offset], ctrl.length);
+- 
+- 		// 全て送信できなければステータスフェーズへ移行
+- 		if (len != (int)ctrl.length) {
+- 			Error();
+- 			return;
+- 		}
+- 
+- 		// オフセットとレングス
+- 		ctrl.offset += ctrl.length;
+- 		ctrl.length = 0;
+- 		return;
+- 	}
+- #else
+  	// オフセットとレングス
+  	ASSERT(ctrl.length >= 1);
+  	ctrl.offset++;
+  	ctrl.length--;
+  
+--- 7666,7681 ----
+***************
+*** 9278,9301 ****
+  	if (ctrl.length != 0) {
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+  		return;
+  	}
+- #endif	// RASCSI
+  
+  	// ブロック減算、リザルト初期化
+  	ctrl.blocks--;
+  	result = TRUE;
+  
+  	// データ引き取り後の処理(リード/データインのみ)
+  	if (ctrl.phase == BUS::datain) {
+  		if (ctrl.blocks != 0) {
+  			// 次のバッファを設定(offset, lengthをセットすること)
+  			result = XferIn(ctrl.buffer);
+- #ifndef RASCSI
+  			ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset]);
+- #endif	// RASCSI
+  		}
+  	}
+  
+  	// リザルトFALSEなら、ステータスフェーズへ移行
+  	if (!result) {
+--- 7683,7703 ----
+***************
+*** 9305,9318 ****
+  
+  	// ブロック!=0なら送信継続
+  	if (ctrl.blocks != 0){
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.offset == 0);
+- #ifndef RASCSI
+  		// ターゲットが操作する信号線
+  		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+  	// 次フェーズに移動
+  	switch (ctrl.phase) {
+--- 7707,7718 ----
+***************
+*** 9351,9361 ****
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+  
+- #ifndef RASCSI
+  //---------------------------------------------------------------------------
+  //
+  //	データ送信継続
+  //
+  //---------------------------------------------------------------------------
+--- 7751,7760 ----
+***************
+*** 9373,9385 ****
+  	// バッファにデータがあれば先に設定する
+  	if (ctrl.length > 1) {
+  		ctrl.bus->SetDAT(ctrl.buffer[ctrl.offset + 1]);
+  	}
+  }
+- #endif	// RASCSI
+  
+- #ifndef RASCSI
+  //---------------------------------------------------------------------------
+  //
+  //	データ受信
+  //
+  //---------------------------------------------------------------------------
+--- 7772,7782 ----
+***************
+*** 9392,9401 ****
+--- 7789,7799 ----
+  	// REQが上がっている
+  	ASSERT(ctrl.bus->GetREQ());
+  	ASSERT(!ctrl.bus->GetIO());
+  
+  	// データ取得
++ 	ctrl.bus->Aquire();
+  	data = (DWORD)ctrl.bus->GetDAT();
+  
+  	// ターゲットが操作する信号線
+  	ctrl.bus->SetREQ(FALSE);
+  
+***************
+*** 9433,9479 ****
+  		default:
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+- #endif	// RASCSI
+  
+- #ifdef RASCSI
+  //---------------------------------------------------------------------------
+  //
+! //	データ受信
+  //
+  //---------------------------------------------------------------------------
+! void FASTCALL SCSIDEV::Receive()
+! #else
+  //---------------------------------------------------------------------------
+  //
+! //	データ受信継続
+  //
+  //---------------------------------------------------------------------------
+! void FASTCALL SCSIDEV::ReceiveNext()
+! #endif	// RASCSI
+  {
+- #ifdef RASCSI
+  	int len;
+- #endif	// RASCSI
+  	BOOL result;
+  	int i;
+  	BYTE data;
+  
+  	ASSERT(this);
+  
+  	// REQが下がっていること
+  	ASSERT(!ctrl.bus->GetREQ());
+  	ASSERT(!ctrl.bus->GetIO());
+  
+- #ifdef RASCSI
+  	// レングス!=0なら受信
+  	if (ctrl.length != 0) {
+! 		// 受信
+! 		len = ctrl.bus->ReceiveHandShake(
+! 			&ctrl.buffer[ctrl.offset], ctrl.length);
+  
+  		// 全て受信できなければステータスフェーズへ移行
+  		if (len != (int)ctrl.length) {
+  			Error();
+  			return;
+--- 7831,8178 ----
+  		default:
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	データ受信継続
+  //
+  //---------------------------------------------------------------------------
+! void FASTCALL SCSIDEV::ReceiveNext()
+! {
+! 	BOOL result;
+! 	int i;
+! 	BYTE data;
+! 
+! 	ASSERT(this);
+! 
+! 	// REQ has dropped
+! 	ASSERT(!ctrl.bus->GetREQ());
+! 	ASSERT(!ctrl.bus->GetIO());
+! 
+! 	// Offset and length
+! 	ASSERT(ctrl.length >= 1);
+! 	ctrl.offset++;
+! 	ctrl.length--;
+! 
+! 	// If length !=0, reset req
+! 	if (ctrl.length != 0) {
+! 		// Signal line that controls the target
+! 		ctrl.bus->SetREQ(TRUE);
+! 		return;
+! 	}
+! 
+! 	// Subtract blocks, init results
+! 	ctrl.blocks--;
+! 	result = TRUE;
+! 
+! 	// Process after accepting data (separate phases)
+! 	switch (ctrl.phase) {
+! 
+! 		// Data out phase
+! 		case BUS::dataout:
+! 			if (ctrl.blocks == 0) {
+! 				// Finish with this buffer
+! 				result = XferOut(FALSE);
+! 			} else {
+! 				// Continue to next buffer (set offset, length)
+! 				result = XferOut(TRUE);
+! 			}
+! 			break;
+! 
+! 		// Message out phase
+! 		case BUS::msgout:
+! 			ctrl.message = ctrl.buffer[0];
+! 			if (!XferMsg(ctrl.message)) {
+! 				// If message out fails, immediate BusFree
+! 				BusFree();
+! 				return;
+! 			}
+! 
+! 			// Prepare for message in, clear message data
+! 			ctrl.message = 0x00;
+! 			break;
+! 
+! 		default:
+! 			break;
+! 	}
+! 
+! 	// If result is FALSE, transition to status phase
+! 	if (!result) {
+! 		Error();
+! 		return;
+! 	}
+! 
+! 	// If block != 0 continue receiving
+! 	if (ctrl.blocks != 0){
+! 		ASSERT(ctrl.length > 0);
+! 		ASSERT(ctrl.offset == 0);
+! 		// Signal line that controls the target
+! 		ctrl.bus->SetREQ(TRUE);
+! 		return;
+! 	}
+! 
+! 	// Transition to next phase
+! 	switch (ctrl.phase) {
+! 		// Command phase
+! 		case BUS::command:
+! 			// Execution phase
+! 			Execute();
+! 			break;
+! 
+! 		// Message out phase
+! 		case BUS::msgout:
+! 			// Only if ATN keep getting asserted do we continue to the message phase
+! 			if (ctrl.bus->GetATN()) {
+! 				// Data redirect is 1 byte by 1 block
+! 				ctrl.offset = 0;
+! 				ctrl.length = 1;
+! 				ctrl.blocks = 1;
+! 				// Request message
+! 				ctrl.bus->SetREQ(TRUE);
+! 				return;
+! 			}
+! 
+! 			// Interpret the ATN message
+! 			if (scsi.atnmsg) {
+! 				i = 0;
+! 				while (i < scsi.msc) {
+! 					// Message type
+! 					data = scsi.msb[i];
+! 
+! 					// ABORT
+! 					if (data == 0x06) {
+! #if defined(DISK_LOG)
+! 						Log(Log::Normal,
+! 							"Message Code ABORT $%02X", data);
+! #endif	// DISK_LOG
+! 						// BusFree
+! 						BusFree();
+! 						return;
+! 					}
+! 
+! 					// BUS DEVICE RESET
+! 					if (data == 0x0C) {
+! #if defined(DISK_LOG)
+! 						Log(Log::Normal,
+! 							"Message Code BUS DEVICE RESET $%02X", data);
+! #endif	// DISK_LOG
+! 						// Reset
+! 						Reset();
+! 
+! 						// The latter BusFree
+! 						BusFree();
+! 						return;
+! 					}
+! 
+! 					// IDENTIFY
+! 					if (data >= 0x80) {
+! #if defined(DISK_LOG)
+! 						Log(Log::Normal,
+! 							"Message Code IDENTIFY $%02X", data);
+! #endif	// DISK_LOG
+! 					}
+! 
+! 					// Expanded message
+! 					if (data == 0x01) {
+! #if defined(DISK_LOG)
+! 						Log(Log::Normal,
+! 							"Message Code EXTENDED MESSAGE $%02X", data);
+! #endif	// DISK_LOG
+! 
+! 						// Only check when synchronized redirection is possible
+! 						if (!scsi.syncenable || scsi.msb[i + 2] != 0x01) {
+! 							// MESSAGE REJECT
+! 							ctrl.length = 1;
+! 							ctrl.blocks = 1;
+! 							ctrl.buffer[0] = 0x07;
+! 							MsgIn();
+! 							return;
+! 						}
+! 
+! 						// Transfer period factor(SYNCPERIOD x 4ns limit)
+! 						scsi.syncperiod = scsi.msb[i + 3];
+! 						if (scsi.syncperiod != 0 && scsi.syncperiod < SYNCPERIOD) {
+! 							scsi.syncperiod = SYNCPERIOD;
+! 						}
+! 
+! 						// REQ/ACK offset(limit of 16)
+! 						scsi.syncoffset = scsi.msb[i + 4];
+! 						if (scsi.syncoffset > SYNCOFFSET) {
+! 							scsi.syncoffset = SYNCOFFSET;
+! 						}
+! 
+! 						// SYNCHRONOUS DATA TRANSFER REQUEST message creation
+! 						ctrl.length = 5;
+! 						ctrl.blocks = 1;
+! 						ctrl.buffer[0] = 0x01;					// Expanded message
+! 						ctrl.buffer[1] = 0x03;					// Expanded message long
+! 						ctrl.buffer[2] = 0x01;					// SDTR code
+! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Redirect period coefficient
+! 						ctrl.buffer[4] = (BYTE)scsi.syncoffset;	// REQ/ACK offset
+! 						MsgIn();
+! 						return;
+! 					}
+! 
+! 					// Moving on
+! 					i++;
+! 				}
+! 			}
+! 
+! 			// ATN message receipt status initialize
+! 			scsi.atnmsg = FALSE;
+! 
+! 			// Command phase
+! 			Command();
+! 			break;
+! 
+! 		// Data out phase
+! 		case BUS::dataout:
+! 			// Flush
+! 			FlushUnit();
+! 
+! 			// Status phase
+! 			Status();
+! 			break;
+! 
+! 		// Other (shouldn't reach here)
+! 		default:
+! 			ASSERT(FALSE);
+! 			break;
+! 	}
+! }
+! 
+! #if USE_BURST_BUS == 1
+  //---------------------------------------------------------------------------
+  //
+! //	Send data
+  //
+  //---------------------------------------------------------------------------
+! void FASTCALL SCSIDEV::SendBurst()
+! {
+! 	int len;
+! 	BOOL result;
+! 
+! 	ASSERT(this);
+! 	ASSERT(!ctrl.bus->GetREQ());
+! 	ASSERT(ctrl.bus->GetIO());
+! 
+! 	// If length != 0 then send
+! 	if (ctrl.length != 0) {
+! 		// Burst send
+! 		if (ctrl.phase == BUS::datain && scsi.syncoffset > 0) {
+! 			len = ctrl.bus->SendHandShake(
+! 				ctrl.buffer, ctrl.length, scsi.syncoffset);
+! 		} else {
+! 			len = ctrl.bus->SendHandShake(ctrl.buffer, ctrl.length);
+! 		}
+! 
+! 		// If everything cannot be received, then transition to status phase
+! 		if (len != (int)ctrl.length) {
+! 			Error();
+! 			return;
+! 		}
+! 
+! 		// Offset and length
+! 		ctrl.offset += ctrl.length;
+! 		ctrl.length = 0;
+! 		return;
+! 	}
+! 
+! 	// Subtract blocks, initialize result
+! 	ctrl.blocks--;
+! 	result = TRUE;
+! 
+! 	// Processing after receiving data (read & data in only)
+! 	if (ctrl.phase == BUS::datain) {
+! 		if (ctrl.blocks != 0) {
+! 			// Configure the next buffer (set offset, length)
+! 			result = XferIn(ctrl.buffer);
+! 		}
+! 	}
+! 
+! 	// If result is FALSE, transition to status phase
+! 	if (!result) {
+! 		Error();
+! 		return;
+! 	}
+! 
+! 	// If block !=0, continue sending
+! 	if (ctrl.blocks != 0){
+! 		ASSERT(ctrl.length > 0);
+! 		ASSERT(ctrl.offset == 0);
+! 		return;
+! 	}
+! 
+! 	// Transition to the next phase
+! 	switch (ctrl.phase) {
+! 		// Message in phase
+! 		case BUS::msgin:
+! 			// Send Reply completion for IDENTIFY message's expanded message
+! 			if (scsi.atnmsg) {
+! 				// Flag off
+! 				scsi.atnmsg = FALSE;
+! 
+! 				// Command phase
+! 				Command();
+! 			} else {
+! 				// Bus free phase
+! 				BusFree();
+! 			}
+! 			break;
+! 
+! 		// Data in phase
+! 		case BUS::datain:
+! 			// Status phase
+! 			Status();
+! 			break;
+! 
+! 		// Status phase
+! 		case BUS::status:
+! 			// Message in phase
+! 			ctrl.length = 1;
+! 			ctrl.blocks = 1;
+! 			ctrl.buffer[0] = (BYTE)ctrl.message;
+! 			MsgIn();
+! 			break;
+! 
+! 		// Other (shouldn't reach here)
+! 		default:
+! 			ASSERT(FALSE);
+! 			break;
+! 	}
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Receive data
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL SCSIDEV::ReceiveBurst()
+  {
+  	int len;
+  	BOOL result;
+  	int i;
+  	BYTE data;
+  
+  	ASSERT(this);
+  
+  	// REQ has dropped
+  	ASSERT(!ctrl.bus->GetREQ());
+  	ASSERT(!ctrl.bus->GetIO());
+  
+  	// If length !=0 then receive
+  	if (ctrl.length != 0) {
+! 		// Burst receive
+! 		if (ctrl.phase == BUS::dataout && scsi.syncoffset > 0) {
+! 			len = ctrl.bus->ReceiveHandShake(
+! 				ctrl.buffer, ctrl.length, scsi.syncoffset);
+! 		} else {
+! 			len = ctrl.bus->ReceiveHandShake(ctrl.buffer, ctrl.length);
+! 		}
+  
+  		// 全て受信できなければステータスフェーズへ移行
+  		if (len != (int)ctrl.length) {
+  			Error();
+  			return;
+***************
+*** 9482,9504 ****
+  		// オフセットとレングス
+  		ctrl.offset += ctrl.length;
+  		ctrl.length = 0;;
+  		return;
+  	}
+- #else
+- 	// オフセットとレングス
+- 	ASSERT(ctrl.length >= 1);
+- 	ctrl.offset++;
+- 	ctrl.length--;
+- 
+- 	// レングス!=0なら、再びreqをセット
+- 	if (ctrl.length != 0) {
+- 		// ターゲットが操作する信号線
+- 		ctrl.bus->SetREQ(TRUE);
+- 		return;
+- 	}
+- #endif	// RASCSI
+  
+  	// ブロック減算、リザルト初期化
+  	ctrl.blocks--;
+  	result = TRUE;
+  
+--- 8181,8190 ----
+***************
+*** 9541,9562 ****
+  
+  	// ブロック!=0なら受信継続
+  	if (ctrl.blocks != 0){
+  		ASSERT(ctrl.length > 0);
+  		ASSERT(ctrl.offset == 0);
+- #ifndef RASCSI
+- 		// ターゲットが操作する信号線
+- 		ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  		return;
+  	}
+  
+  	// 次フェーズに移動
+  	switch (ctrl.phase) {
+  		// コマンドフェーズ
+  		case BUS::command:
+- #ifdef RASCSI
+  			// コマンドデータ転送
+  			len = 6;
+  			if (ctrl.buffer[0] >= 0x20 && ctrl.buffer[0] <= 0x7D) {
+  				// 10バイトCDB
+  				len = 10;
+--- 8227,8243 ----
+***************
+*** 9565,9575 ****
+  				ctrl.cmd[i] = (DWORD)ctrl.buffer[i];
+  #if defined(DISK_LOG)
+  				Log(Log::Normal, "コマンド $%02X", ctrl.cmd[i]);
+  #endif	// DISK_LOG
+  			}
+- #endif	// RASCSI
+  
+  			// 実行フェーズ
+  			Execute();
+  			break;
+  
+--- 8246,8255 ----
+***************
+*** 9579,9592 ****
+  			if (ctrl.bus->GetATN()) {
+  				// データ転送は1バイトx1ブロック
+  				ctrl.offset = 0;
+  				ctrl.length = 1;
+  				ctrl.blocks = 1;
+- #ifndef RASCSI
+- 				// メッセージを要求
+- 				ctrl.bus->SetREQ(TRUE);
+- #endif	// RASCSI
+  				return;
+  			}
+  
+  			// ATNで送信されたメッセージの解析
+  			if (scsi.atnmsg) {
+--- 8259,8268 ----
+***************
+*** 9599,9619 ****
+  					if (data == 0x06) {
+  #if defined(DISK_LOG)
+  						Log(Log::Normal,
+  							"メッセージコード ABORT $%02X", data);
+  #endif	// DISK_LOG
+  						BusFree();
+  						return;
+  					}
+  
+  					// BUS DEVICE RESET
+  					if (data == 0x0C) {
+  #if defined(DISK_LOG)
+  						Log(Log::Normal,
+  							"メッセージコード BUS DEVICE RESET $%02X", data);
+  #endif	// DISK_LOG
+! 						scsi.syncoffset = 0;
+  						BusFree();
+  						return;
+  					}
+  
+  					// IDENTIFY
+--- 8275,8299 ----
+  					if (data == 0x06) {
+  #if defined(DISK_LOG)
+  						Log(Log::Normal,
+  							"メッセージコード ABORT $%02X", data);
+  #endif	// DISK_LOG
++ 						// Bus free
+  						BusFree();
+  						return;
+  					}
+  
+  					// BUS DEVICE RESET
+  					if (data == 0x0C) {
+  #if defined(DISK_LOG)
+  						Log(Log::Normal,
+  							"メッセージコード BUS DEVICE RESET $%02X", data);
+  #endif	// DISK_LOG
+! 						// Reset
+! 						Reset();
+! 
+! 						// The following bus free
+  						BusFree();
+  						return;
+  					}
+  
+  					// IDENTIFY
+***************
+*** 9631,9667 ****
+  							"メッセージコード EXTENDED MESSAGE $%02X", data);
+  #endif	// DISK_LOG
+  
+  						// 同期転送が可能な時だけチェック
+  						if (!scsi.syncenable || scsi.msb[i + 2] != 0x01) {
+  							ctrl.length = 1;
+  							ctrl.blocks = 1;
+  							ctrl.buffer[0] = 0x07;
+  							MsgIn();
+  							return;
+  						}
+  
+! 						// Transfer period factor(50 x 4 = 200ns limit)
+  						scsi.syncperiod = scsi.msb[i + 3];
+! 						if (scsi.syncperiod > 50) {
+! 							scsi.syncoffset = 50;
+  						}
+  
+  						// REQ/ACK offset(limited to 16)
+  						scsi.syncoffset = scsi.msb[i + 4];
+! 						if (scsi.syncoffset > 16) {
+! 							scsi.syncoffset = 16;
+  						}
+  
+! 						// Generate the STDR response message
+  						ctrl.length = 5;
+  						ctrl.blocks = 1;
+! 						ctrl.buffer[0] = 0x01;
+! 						ctrl.buffer[1] = 0x03;
+! 						ctrl.buffer[2] = 0x01;
+! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;
+! 						ctrl.buffer[4] = (BYTE)scsi.syncoffset;
+  						MsgIn();
+  						return;
+  					}
+  
+  					// 次へ
+--- 8311,8348 ----
+  							"メッセージコード EXTENDED MESSAGE $%02X", data);
+  #endif	// DISK_LOG
+  
+  						// 同期転送が可能な時だけチェック
+  						if (!scsi.syncenable || scsi.msb[i + 2] != 0x01) {
++ 							// MESSAGE REJECT
+  							ctrl.length = 1;
+  							ctrl.blocks = 1;
+  							ctrl.buffer[0] = 0x07;
+  							MsgIn();
+  							return;
+  						}
+  
+! 						// Transfer period factor(SYNCPERIOD x 4ns limit)
+  						scsi.syncperiod = scsi.msb[i + 3];
+! 						if (scsi.syncperiod != 0 && scsi.syncperiod < SYNCPERIOD) {
+! 							scsi.syncperiod = SYNCPERIOD;
+  						}
+  
+  						// REQ/ACK offset(16に制限)
+  						scsi.syncoffset = scsi.msb[i + 4];
+! 						if (scsi.syncoffset > SYNCOFFSET) {
+! 							scsi.syncoffset = SYNCOFFSET;
+  						}
+  
+! 						// SYNCHRONOUS DATA TRANSFER REQUESTメッセージ生成
+  						ctrl.length = 5;
+  						ctrl.blocks = 1;
+! 						ctrl.buffer[0] = 0x01;					// Expanded message
+! 						ctrl.buffer[1] = 0x03;					// Expanded message long
+! 						ctrl.buffer[2] = 0x01;					// SDTR code
+! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Redirect period coefficient
+! 						ctrl.buffer[4] = (BYTE)scsi.syncoffset;	// REQ/ACK offset
+  						MsgIn();
+  						return;
+  					}
+  
+  					// 次へ
+***************
+*** 9689,9698 ****
+--- 8370,8380 ----
+  		default:
+  			ASSERT(FALSE);
+  			break;
+  	}
+  }
++ #endif	// USE_BURST_BUS
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データ転送MSG
+  //
