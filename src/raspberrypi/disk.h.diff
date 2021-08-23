@@ -1,0 +1,938 @@
+*** src/raspberrypi/disk.h	Sat Apr 11 22:53:42 2020
+--- src/raspberrypi/disk.h	Fri Mar 26 21:18:46 2021
+***************
+*** 1,26 ****
+  //---------------------------------------------------------------------------
+  //
+! //	X68000 EMULATOR "XM6"
+  //
+! //	Copyright (C) 2001-2006 ＰＩ．(ytanaka@ipc-tokai.or.jp)
+! //	Copyright (C) 2014-2020 GIMONS
+! //
+! //	XM6i
+  //	Copyright (C) 2010-2015 isaki@NetBSD.org
+- //
+  //  Imported sava's Anex86/T98Next image and MO format support patch.
+  //
+  //	[ ディスク ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(disk_h)
+  #define disk_h
+  
+! #include "log.h"
+! #include "scsi.h"
+  
+  //---------------------------------------------------------------------------
+  //
+  //	エラー定義(REQUEST SENSEで返されるセンスコード)
+  //
+--- 1,201 ----
+  //---------------------------------------------------------------------------
+  //
+! //	SCSI Target Emulator RaSCSI (*^..^*)
+! //	for Raspberry Pi
+! //	Powered by XM6 TypeG Technology.
+  //
+! //	Copyright (C) 2001-2006 PI.(Twitter:@xm6_original)
+! //	Copyright (C) 2014-2021 GIMONS(Twitter:@kugimoto0715)
+  //	Copyright (C) 2010-2015 isaki@NetBSD.org
+  //  Imported sava's Anex86/T98Next image and MO format support patch.
+  //
+  //	[ ディスク ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(disk_h)
+  #define disk_h
+  
+! //===========================================================================
+! //
+! //	Environment definitions
+! //
+! //===========================================================================
+! #define DEFAULT_VERSION	RASCSI			// INQUERY version number
+! #define DEFAULT_VENDER	"RASCSI"		// INQUERY vendor name
+! #define USE_LOG_OUTPUT	1				// 1:printf output
+! #define USE_WAIT_CTRL	1				// 1: Enable timing adjustment
+! #define USE_BURST_BUS	1				// 1: Enable data burst transfer
+! #define USE_SYNC_TRANS	0				// 1: Enable synchronized redirect
+! #define USE_MZ1F23_1024_SUPPORT		1	// 1: MZ-1F23 (20M/sector size 1024)
+! #define REMOVE_FIXED_SASIHD_SIZE	1	// 1: Remove SASIHD size restrictions
+! #define BRIDGE_PRODUCT	"RASCSI BRIDGE"	// Bridge device product name
+! 
+! //===========================================================================
+! //
+! //	Headers
+! //
+! //===========================================================================
+! #include "filepath.h"
+! #include "fileio.h"
+! 
+! //===========================================================================
+! //
+! //	Log
+! //
+! //===========================================================================
+! class Log
+! {
+! public:
+! 	enum loglevel {
+! 		Detail,							// Detailed level
+! 		Normal,							// Normal level
+! 		Warning,						// Warning level
+! 		Debug							// Debug level
+! 	};
+! };
+! 
+! //===========================================================================
+! //
+! //	SASI/SCSI bus
+! //
+! //===========================================================================
+! class BUS
+! {
+! public:
+! 	//	Phase definitions
+! 	enum phase_t {
+! 		busfree,						// Bus free phase
+! 		arbitration,					// Arbitration phase
+! 		selection,						// Selection phase
+! 		reselection,					// Reselection phase
+! 		command,						// Command phase
+! 		execute,						// Execute phase
+! 		datain,							// Data in
+! 		dataout,						// Data out
+! 		status,							// Status phase
+! 		msgin,							// Message phase
+! 		msgout,							// Message out phase
+! 		reserved						// Unused / reserved
+! 	};
+! 
+! 	// Base functions
+! 	virtual BOOL FASTCALL Init() = 0;
+! 										// Initialization
+! 	virtual void FASTCALL Reset() = 0;
+! 										// Reset
+! 	virtual void FASTCALL Cleanup() = 0;
+! 										// Cleanup
+! 	phase_t FASTCALL GetPhase()
+! 	{
+! 		DWORD mci;
+! 
+! 		ASSERT(this);
+! 
+! 		// Selection phase
+! 		if (GetSEL()) {
+! 			return selection;
+! 		}
+! 
+! 		// Bus free phase
+! 		if (!GetBSY()) {
+! 			return busfree;
+! 		}
+! 
+! 		// Get target phase from the bus
+! 		mci = GetMSG() ? 0x04 : 0x00;
+! 		mci |= GetCD() ? 0x02 : 0x00;
+! 		mci |= GetIO() ? 0x01 : 0x00;
+! 		return Mci2Phase(mci);
+! 	}
+! 										// Get phase
+! 
+! 	static phase_t FASTCALL Mci2Phase(DWORD mci)
+! 	{
+! 		static const phase_t phase_table[8] =
+! 		{
+! 			dataout,
+! 			datain,
+! 			command,
+! 			status,
+! 			reserved,
+! 			reserved,
+! 			msgout,
+! 			msgin
+! 		};
+! 
+! 		return phase_table[mci];
+! 	}
+! 										// Get phase
+! 
+! 	virtual DWORD FASTCALL Aquire() const = 0;
+! 										// Acquire signal
+! 
+! 	virtual BOOL FASTCALL GetBSY() const = 0;
+! 										// Get BSY signal
+! 	virtual void FASTCALL SetBSY(BOOL ast) = 0;
+! 										// Set BSY signal
+! 
+! 	virtual BOOL FASTCALL GetSEL() const = 0;
+! 										// Get SEL signal
+! 	virtual void FASTCALL SetSEL(BOOL ast) = 0;
+! 										// Set SEL signal
+! 
+! 	virtual BOOL FASTCALL GetATN() const = 0;
+! 										// Get ATN signal
+! 	virtual void FASTCALL SetATN(BOOL ast) = 0;
+! 										// Set ATN signal
+! 
+! 	virtual BOOL FASTCALL GetACK() const = 0;
+! 										// Get ACK signal
+! 	virtual void FASTCALL SetACK(BOOL ast) = 0;
+! 										// Set ACK signal
+! 
+! 	virtual BOOL FASTCALL GetRST() const = 0;
+! 										// Get RST signal
+! 	virtual void FASTCALL SetRST(BOOL ast) = 0;
+! 										// Set RST signal
+! 
+! 	virtual BOOL FASTCALL GetMSG() const = 0;
+! 										// Get MSG signal
+! 	virtual void FASTCALL SetMSG(BOOL ast) = 0;
+! 										// Set MSG signal
+! 
+! 	virtual BOOL FASTCALL GetCD() const = 0;
+! 										// GetCD signal
+! 	virtual void FASTCALL SetCD(BOOL ast) = 0;
+! 										// Set CD signal
+! 
+! 	virtual BOOL FASTCALL GetIO() const = 0;
+! 										// Get IO signal
+! 	virtual void FASTCALL SetIO(BOOL ast) = 0;
+! 										// Set IO signal
+! 
+! 	virtual BOOL FASTCALL GetREQ() const = 0;
+! 										// Get REQ signal
+! 	virtual void FASTCALL SetREQ(BOOL ast) = 0;
+! 										// Set REQ signal
+! 
+! 	virtual BYTE FASTCALL GetDAT() const = 0;
+! 										// Get data signal
+! 	virtual void FASTCALL SetDAT(BYTE dat) = 0;
+! 										// Set data signal
+! 	virtual BOOL FASTCALL GetDP() const = 0;
+! 										// Get parity signal
+! 
+! #if USE_BURST_BUS == 1
+! 	virtual int FASTCALL CommandHandShake(BYTE *buf) = 0;
+! 										// Batch command handshake
+! 	virtual int FASTCALL SendHandShake(
+! 		BYTE *buf, int len, int syncoffset = 0) = 0;
+! 										// Batch data send handshake
+! 	virtual int FASTCALL ReceiveHandShake(
+! 		BYTE *buf, int len, int syncoffset = 0) = 0;
+! 										// Bach data receive
+! #endif	// USE_BURST_BUS
+! };
+  
+  //---------------------------------------------------------------------------
+  //
+  //	エラー定義(REQUEST SENSEで返されるセンスコード)
+  //
+***************
+*** 61,73 ****
+--- 236,253 ----
+  //===========================================================================
+  //
+  //	ディスクトラック
+  //
+  //===========================================================================
++ class Disk;
+  class DiskTrack
+  {
+  public:
++ 	enum {
++ 		NumSectors = 32					// Number of sectors per track
++ 	};
++ 
+  	// 内部データ定義
+  	typedef struct {
+  		int track;						// トラックナンバー
+  		int size;						// セクタサイズ(8 or 9)
+  		int sectors;					// セクタ数(<=0x100)
+***************
+*** 85,100 ****
+  	// 基本ファンクション
+  	DiskTrack();
+  										// コンストラクタ
+  	virtual ~DiskTrack();
+  										// デストラクタ
+! 	void FASTCALL Init(int track, int size, int sectors, BOOL raw = FALSE,
+! 														 off64_t imgoff = 0);
+  										// 初期化
+! 	BOOL FASTCALL Load(const Filepath& path);
+  										// ロード
+! 	BOOL FASTCALL Save(const Filepath& path);
+  										// セーブ
+  
+  	// リード・ライト
+  	BOOL FASTCALL Read(BYTE *buf, int sec) const;
+  										// セクタリード
+--- 265,281 ----
+  	// 基本ファンクション
+  	DiskTrack();
+  										// Constructor
+  	virtual ~DiskTrack();
+  										// Destructor
+! 	void FASTCALL Init(
+! 		Disk *p, int track, int size, int sectors,
+! 		BOOL raw = FALSE, off64_t imgoff = 0);
+  										// Initialization
+! 	BOOL FASTCALL Load();
+  										// Load
+! 	BOOL FASTCALL Save();
+  										// Save
+  
+  	// リード・ライト
+  	BOOL FASTCALL Read(BYTE *buf, int sec) const;
+  										// セクタリード
+***************
+*** 107,116 ****
+--- 288,299 ----
+  	BOOL FASTCALL IsChanged() const		{ return dt.changed; }
+  										// 変更フラグチェック
+  
+  private:
+  	// 内部データ
++ 	Disk *disk;
++ 										// Disk
+  	disktrk_t dt;
+  										// 内部データ
+  };
+  
+  //===========================================================================
+***************
+*** 127,143 ****
+  		DWORD serial;					// 最終シリアル
+  	} cache_t;
+  
+  	// キャッシュ数
+  	enum {
+! 		CacheMax = 16					// Number of tracks to cache
+  	};
+  
+  public:
+  	// 基本ファンクション
+! 	DiskCache(const Filepath& path, int size, int blocks,
+! 														off64_t imgoff = 0);
+  										// コンストラクタ
+  	virtual ~DiskCache();
+  										// デストラクタ
+  	void FASTCALL SetRawMode(BOOL raw);
+  										// CD-ROM rawモード設定
+--- 310,325 ----
+  		DWORD serial;					// 最終シリアル
+  	} cache_t;
+  
+  	// キャッシュ数
+  	enum {
+! 		CacheMax = 16
+  	};
+  
+  public:
+  	// 基本ファンクション
+! 	DiskCache(Disk *p, int size, int blocks, off64_t imgoff = 0);
+  										// Constructor
+  	virtual ~DiskCache();
+  										// デストラクタ
+  	void FASTCALL SetRawMode(BOOL raw);
+  										// CD-ROM rawモード設定
+***************
+*** 162,177 ****
+  										// トラックのロード
+  	void FASTCALL Update();
+  										// シリアル番号更新
+  
+  	// 内部データ
+  	cache_t cache[CacheMax];
+  										// キャッシュ管理
+  	DWORD serial;
+  										// 最終アクセスシリアルナンバ
+- 	Filepath sec_path;
+- 										// Path
+  	int sec_size;
+  										// セクタサイズ(8 or 9 or 11)
+  	int sec_blocks;
+  										// セクタブロック数
+  	BOOL cd_raw;
+--- 344,359 ----
+  										// トラックのロード
+  	void FASTCALL Update();
+  										// シリアル番号更新
+  
+  	// 内部データ
++ 	Disk *disk;
++ 										// Disk
+  	cache_t cache[CacheMax];
+  										// キャッシュ管理
+  	DWORD serial;
+  										// 最終アクセスシリアルナンバ
+  	int sec_size;
+  										// セクタサイズ(8 or 9 or 11)
+  	int sec_blocks;
+  										// セクタブロック数
+  	BOOL cd_raw;
+***************
+*** 212,227 ****
+  										// コンストラクタ
+  	virtual ~Disk();
+  										// デストラクタ
+  	virtual void FASTCALL Reset();
+  										// デバイスリセット
+- #ifndef RASCSI
+- 	virtual BOOL FASTCALL Save(Fileio *fio, int ver);
+- 										// セーブ
+- 	virtual BOOL FASTCALL Load(Fileio *fio, int ver);
+- 										// ロード
+- #endif	// RASCSI
+  
+  	// ID
+  	DWORD FASTCALL GetID() const		{ return disk.id; }
+  										// メディアID取得
+  	BOOL FASTCALL IsNULL() const;
+--- 394,403 ----
+***************
+*** 317,330 ****
+  										// PLAY AUDIO TRACKコマンド
+  	void FASTCALL InvalidCmd()			{ disk.code = DISK_INVALIDCMD; }
+  										// サポートしていないコマンド
+  
+  	// その他
+! 	BOOL IsCacheWB() { return cache_wb; }
+  										// Get cache mode
+! 	void SetCacheWB(BOOL enable) { cache_wb = enable; }
+  										// Set cache mode
+  
+  protected:
+  	// サブ処理
+  	virtual int FASTCALL AddError(BOOL change, BYTE *buf);
+  										// エラーページ追加
+--- 493,508 ----
+  										// PLAY AUDIO TRACKコマンド
+  	void FASTCALL InvalidCmd()			{ disk.code = DISK_INVALIDCMD; }
+  										// サポートしていないコマンド
+  
+  	// その他
+! 	BOOL FASTCALL IsCacheWB() { return cache_wb; }
+  										// Get cache mode
+! 	void FASTCALL SetCacheWB(BOOL enable) { cache_wb = enable; }
+  										// Set cache mode
++ 	Fileio* FASTCALL GetFio() { return &fio; };
++ 										// Get file IO
+  
+  protected:
+  	// サブ処理
+  	virtual int FASTCALL AddError(BOOL change, BYTE *buf);
+  										// エラーページ追加
+***************
+*** 350,359 ****
+--- 528,539 ----
+  										// ディスク内部データ
+  	Filepath diskpath;
+  										// パス(GetPath用)
+  	BOOL cache_wb;
+  										// キャッシュモード
++ 	Fileio fio;
++ 										// File IO
+  };
+  
+  //===========================================================================
+  //
+  //	SASI ハードディスク
+***************
+*** 473,486 ****
+  	// 基本ファンクション
+  	SCSIMO();
+  										// コンストラクタ
+  	BOOL FASTCALL Open(const Filepath& path, BOOL attn = TRUE);
+  										// オープン
+- #ifndef RASCSI
+- 	BOOL FASTCALL Load(Fileio *fio, int ver);
+- 										// ロード
+- #endif	// RASCSI
+  
+  	// コマンド
+  	int FASTCALL Inquiry(const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor);
+  										// INQUIRYコマンド
+  	BOOL FASTCALL ModeSelect(const DWORD *cdb, const BYTE *buf, int length);
+--- 653,662 ----
+***************
+*** 625,638 ****
+  										// コンストラクタ
+  	virtual ~SCSICD();
+  										// デストラクタ
+  	BOOL FASTCALL Open(const Filepath& path, BOOL attn = TRUE);
+  										// オープン
+- #ifndef	RASCSI
+- 	BOOL FASTCALL Load(Fileio *fio, int ver);
+- 										// ロード
+- #endif	// RASCSI
+  
+  	// コマンド
+  	int FASTCALL Inquiry(const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor);
+  										// INQUIRYコマンド
+  	int FASTCALL Read(BYTE *buf, DWORD block);
+--- 801,810 ----
+***************
+*** 703,837 ****
+  //===========================================================================
+  //
+  //	SCSI ホストブリッジ
+  //
+  //===========================================================================
+- #if defined(RASCSI) && !defined(BAREMETAL)
+- class CTapDriver;
+- #endif	// RASCSI && !BAREMETAL
+- class CFileSys;
+  class SCSIBR : public Disk
+  {
+  public:
+  	// 基本ファンクション
+  	SCSIBR();
+  										// コンストラクタ
+  	virtual ~SCSIBR();
+  										// デストラクタ
+  
+  	// コマンド
+! 	int FASTCALL Inquiry(const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor);
+  										// INQUIRYコマンド
+  	BOOL FASTCALL TestUnitReady(const DWORD *cdb);
+  										// TEST UNIT READYコマンド
+  	int FASTCALL GetMessage10(const DWORD *cdb, BYTE *buf);
+  										// GET MESSAGE10コマンド
+! 	BOOL FASTCALL SendMessage10(const DWORD *cdb, BYTE *buf);
+  										// SEND MESSAGE10コマンド
+  
+  private:
+! #if defined(RASCSI) && !defined(BAREMETAL)
+! 	int FASTCALL GetMacAddr(BYTE *buf);
+! 										// MACアドレス取得
+! 	void FASTCALL SetMacAddr(BYTE *buf);
+! 										// MACアドレス設定
+! 	void FASTCALL ReceivePacket();
+! 										// パケット受信
+! 	void FASTCALL GetPacketBuf(BYTE *buf);
+! 										// パケット取得
+! 	void FASTCALL SendPacket(BYTE *buf, int len);
+! 										// パケット送信
+! 
+! 	CTapDriver *tap;
+! 										// TAPドライバ
+! 	BOOL m_bTapEnable;
+! 										// TAP有効フラグ
+! 	BYTE mac_addr[6];
+! 										// MACアドレス
+! 	int packet_len;
+! 										// 受信パケットサイズ
+! 	BYTE packet_buf[0x1000];
+! 										// 受信パケットバッファ
+! 	BOOL packet_enable;
+! 										// 受信パケット有効
+! #endif	// RASCSI && !BAREMETAL
+! 
+! 	int FASTCALL ReadFsResult(BYTE *buf);
+! 										// ファイルシステム読み込み(結果コード)
+! 	int FASTCALL ReadFsOut(BYTE *buf);
+! 										// ファイルシステム読み込み(返却データ)
+! 	int FASTCALL ReadFsOpt(BYTE *buf);
+! 										// ファイルシステム読み込み(オプションデータ)
+! 	void FASTCALL WriteFs(int func, BYTE *buf);
+! 										// ファイルシステム書き込み(実行)
+! 	void FASTCALL WriteFsOpt(BYTE *buf, int len);
+! 										// ファイルシステム書き込み(オプションデータ)
+! 
+! 	// コマンドハンドラ
+! 	void FASTCALL FS_InitDevice(BYTE *buf);
+! 										// $40 - デバイス起動
+! 	void FASTCALL FS_CheckDir(BYTE *buf);
+! 										// $41 - ディレクトリチェック
+! 	void FASTCALL FS_MakeDir(BYTE *buf);
+! 										// $42 - ディレクトリ作成
+! 	void FASTCALL FS_RemoveDir(BYTE *buf);
+! 										// $43 - ディレクトリ削除
+! 	void FASTCALL FS_Rename(BYTE *buf);
+! 										// $44 - ファイル名変更
+! 	void FASTCALL FS_Delete(BYTE *buf);
+! 										// $45 - ファイル削除
+! 	void FASTCALL FS_Attribute(BYTE *buf);
+! 										// $46 - ファイル属性取得/設定
+! 	void FASTCALL FS_Files(BYTE *buf);
+! 										// $47 - ファイル検索
+! 	void FASTCALL FS_NFiles(BYTE *buf);
+! 										// $48 - ファイル次検索
+! 	void FASTCALL FS_Create(BYTE *buf);
+! 										// $49 - ファイル作成
+! 	void FASTCALL FS_Open(BYTE *buf);
+! 										// $4A - ファイルオープン
+! 	void FASTCALL FS_Close(BYTE *buf);
+! 										// $4B - ファイルクローズ
+! 	void FASTCALL FS_Read(BYTE *buf);
+! 										// $4C - ファイル読み込み
+! 	void FASTCALL FS_Write(BYTE *buf);
+! 										// $4D - ファイル書き込み
+! 	void FASTCALL FS_Seek(BYTE *buf);
+! 										// $4E - ファイルシーク
+! 	void FASTCALL FS_TimeStamp(BYTE *buf);
+! 										// $4F - ファイル時刻取得/設定
+! 	void FASTCALL FS_GetCapacity(BYTE *buf);
+! 										// $50 - 容量取得
+! 	void FASTCALL FS_CtrlDrive(BYTE *buf);
+! 										// $51 - ドライブ状態検査/制御
+! 	void FASTCALL FS_GetDPB(BYTE *buf);
+! 										// $52 - DPB取得
+! 	void FASTCALL FS_DiskRead(BYTE *buf);
+! 										// $53 - セクタ読み込み
+! 	void FASTCALL FS_DiskWrite(BYTE *buf);
+! 										// $54 - セクタ書き込み
+! 	void FASTCALL FS_Ioctrl(BYTE *buf);
+! 										// $55 - IOCTRL
+! 	void FASTCALL FS_Flush(BYTE *buf);
+! 										// $56 - フラッシュ
+! 	void FASTCALL FS_CheckMedia(BYTE *buf);
+! 										// $57 - メディア交換チェック
+! 	void FASTCALL FS_Lock(BYTE *buf);
+! 										// $58 - 排他制御
+! 
+! 	CFileSys *fs;
+! 										// ファイルシステムアクセッサー
+! 	DWORD fsresult;
+! 										// ファイルシステムアクセス結果コード
+! 	BYTE fsout[0x800];
+! 										// ファイルシステムアクセス結果バッファ
+! 	DWORD fsoutlen;
+! 										// ファイルシステムアクセス結果バッファサイズ
+! 	BYTE fsopt[0x1000000];
+! 										// ファイルシステムアクセスバッファ
+! 	DWORD fsoptlen;
+! 										// ファイルシステムアクセスバッファサイズ
+  };
+  
+  //===========================================================================
+  //
+  //	SASI コントローラ
+--- 875,914 ----
+  //===========================================================================
+  //
+  //	SCSI host bridge
+  //
+  //===========================================================================
+  class SCSIBR : public Disk
+  {
+  public:
+  	// Base functions
+  	SCSIBR();
+  										// コンストラクタ
+  	virtual ~SCSIBR();
+  										// デストラクタ
+  
+  	// Command
+! 	int FASTCALL Inquiry(
+! 		const DWORD *cdb, BYTE *buf, DWORD major, DWORD minor);
+  										// INQUIRY command
+  	BOOL FASTCALL TestUnitReady(const DWORD *cdb);
+  										// TEST UNIT READY command
+  	int FASTCALL GetMessage10(const DWORD *cdb, BYTE *buf);
+  										// GET MESSAGE10 command
+! 	int FASTCALL SendMessage10(const DWORD *cdb, BYTE *buf);
+  										// SEND MESSAGE10 command
+  
++ 	// Message handler functions
++ 	typedef int (*MsgFunc)(BOOL read, int func, int phase, int len, BYTE *);
++ 										// Message handler function declaration
++ 
++ 	void FASTCALL SetMsgFunc(int type, MsgFunc f);
++ 										// Message handler function registration
++ 
+  private:
+! 	MsgFunc pMsgFunc[8];
+! 										// Message handler function pointer
+  };
+  
+  //===========================================================================
+  //
+  //	SASI コントローラ
+***************
+*** 843,859 ****
+  	// 論理ユニット最大数
+  	enum {
+  		UnitMax = 8
+  	};
+  
+! #ifdef RASCSI
+  	// タイミング調整用
+  	enum {
+! 		min_exec_time_sasi	= 100,			// SASI BOOT/FORMAT 30:NG 35:OK
+! 		min_exec_time_scsi	= 50
+  	};
+! #endif	// RASCSI
+  
+  	// 内部データ定義
+  	typedef struct {
+  		// 全般
+  		BUS::phase_t phase;				// 遷移フェーズ
+--- 920,937 ----
+  	// 論理ユニット最大数
+  	enum {
+  		UnitMax = 8
+  	};
+  
+! #if USE_WAIT_CTRL == 1
+  	// Used for timing adjustment
+  	enum {
+! 		min_status_time =	20,
+! 		min_exec_time =		100,
+! 		min_data_time =		200
+  	};
+! #endif	// USE_WAIT_CTRL
+  
+  	// 内部データ定義
+  	typedef struct {
+  		// 全般
+  		BUS::phase_t phase;				// 遷移フェーズ
+***************
+*** 863,876 ****
+  		// コマンド
+  		DWORD cmd[10];					// コマンドデータ
+  		DWORD status;					// ステータスデータ
+  		DWORD message;					// メッセージデータ
+  
+! #ifdef RASCSI
+  		// 実行
+  		DWORD execstart;				// 実行開始時間
+! #endif	// RASCSI
+  
+  		// 転送
+  		BYTE *buffer;					// 転送バッファ
+  		int bufsize;					// 転送バッファサイズ
+  		DWORD blocks;					// 転送ブロック数
+--- 941,954 ----
+  		// コマンド
+  		DWORD cmd[10];					// コマンドデータ
+  		DWORD status;					// ステータスデータ
+  		DWORD message;					// メッセージデータ
+  
+! #if USE_WAIT_CTRL == 1
+  		// Execute
+  		DWORD execstart;				// Execution start time
+! #endif	// USE_WAIT_CTRL
+  
+  		// 転送
+  		BYTE *buffer;					// 転送バッファ
+  		int bufsize;					// 転送バッファサイズ
+  		DWORD blocks;					// 転送ブロック数
+***************
+*** 883,909 ****
+  										// 論理ユニット
+  	} ctrl_t;
+  
+  public:
+  	// 基本ファンクション
+- #ifdef RASCSI
+  	SASIDEV();
+- #else
+- 	SASIDEV(Device *dev);
+- #endif //RASCSI
+- 
+  										// コンストラクタ
+  	virtual ~SASIDEV();
+  										// デストラクタ
+  	virtual void FASTCALL Reset();
+  										// デバイスリセット
+- #ifndef RASCSI
+- 	virtual BOOL FASTCALL Save(Fileio *fio, int ver);
+- 										// セーブ
+- 	virtual BOOL FASTCALL Load(Fileio *fio, int ver);
+- 										// ロード
+- #endif //RASCSI
+  
+  	// 外部API
+  	virtual BUS::phase_t FASTCALL Process();
+  										// 実行
+  
+--- 961,976 ----
+***************
+*** 979,998 ****
+  										// サポートしていないコマンド
+  
+  	// データ転送
+  	virtual void FASTCALL Send();
+  										// データ送信
+- #ifndef RASCSI
+  	virtual void FASTCALL SendNext();
+  										// データ送信継続
+- #endif	// RASCSI
+  	virtual void FASTCALL Receive();
+  										// データ受信
+- #ifndef RASCSI
+  	virtual void FASTCALL ReceiveNext();
+  										// データ受信継続
+! #endif	// RASCSI
+  	BOOL FASTCALL XferIn(BYTE* buf);
+  										// データ転送IN
+  	BOOL FASTCALL XferOut(BOOL cont);
+  										// データ転送OUT
+  
+--- 1046,1069 ----
+  										// サポートしていないコマンド
+  
+  	// データ転送
+  	virtual void FASTCALL Send();
+  										// データ送信
+  	virtual void FASTCALL SendNext();
+  										// データ送信継続
+  	virtual void FASTCALL Receive();
+  										// データ受信
+  	virtual void FASTCALL ReceiveNext();
+  										// データ受信継続
+! 
+! #if USE_BURST_BUS == 1
+! 	virtual void FASTCALL SendBurst();
+! 										// Burst send
+! 	virtual void FASTCALL ReceiveBurst();
+! 										// Burst receive
+! #endif	// USE_BURST_BUS
+! 
+  	BOOL FASTCALL XferIn(BYTE* buf);
+  										// データ転送IN
+  	BOOL FASTCALL XferOut(BOOL cont);
+  										// データ転送OUT
+  
+***************
+*** 1003,1017 ****
+  	// ログ
+  	void FASTCALL Log(Log::loglevel level, const char *format, ...);
+  										// ログ出力
+  
+  protected:
+- #ifndef RASCSI
+- 	Device *host;
+- 										// ホストデバイス
+- #endif // RASCSI
+- 
+  	ctrl_t ctrl;
+  										// 内部データ
+  };
+  
+  //===========================================================================
+--- 1074,1083 ----
+***************
+*** 1026,1062 ****
+  	typedef struct {
+  		// 同期転送
+  		BOOL syncenable;				// 同期転送可能
+  		int syncperiod;					// 同期転送ピリオド
+  		int syncoffset;					// 同期転送オフセット
+- 		int syncack;					// 同期転送ACK数
+  
+  		// ATNメッセージ
+  		BOOL atnmsg;
+  		int msc;
+  		BYTE msb[256];
+  	} scsi_t;
+  
+  public:
+  	// 基本ファンクション
+- #ifdef RASCSI
+  	SCSIDEV();
+- #else
+- 	SCSIDEV(Device *dev);
+- #endif // RASCSI
+  										// コンストラクタ
+  
+  	void FASTCALL Reset();
+  										// デバイスリセット
+  
+  	// 外部API
+  	BUS::phase_t FASTCALL Process();
+  										// 実行
+  
+- 	void FASTCALL SyncTransfer(BOOL enable) { scsi.syncenable = enable; }
+- 										// 同期転送可能設定
+- 
+  	// その他
+  	BOOL FASTCALL IsSASI() const {return FALSE;}
+  										// SASIチェック
+  	BOOL FASTCALL IsSCSI() const {return TRUE;}
+  										// SCSIチェック
+--- 1092,1125 ----
+  	typedef struct {
+  		// 同期転送
+  		BOOL syncenable;				// 同期転送可能
+  		int syncperiod;					// 同期転送ピリオド
+  		int syncoffset;					// 同期転送オフセット
+  
+  		// ATNメッセージ
+  		BOOL atnmsg;
+  		int msc;
+  		BYTE msb[256];
+  	} scsi_t;
+  
++ 	enum {
++ 		SYNCPERIOD = 50,
++ 		SYNCOFFSET = 16
++ 	};
++ 
+  public:
+  	// 基本ファンクション
+  	SCSIDEV();
+  										// コンストラクタ
+  
+  	void FASTCALL Reset();
+  										// デバイスリセット
+  
+  	// 外部API
+  	BUS::phase_t FASTCALL Process();
+  										// 実行
+  
+  	// その他
+  	BOOL FASTCALL IsSASI() const {return FALSE;}
+  										// SASIチェック
+  	BOOL FASTCALL IsSCSI() const {return TRUE;}
+  										// SCSIチェック
+***************
+*** 1119,1138 ****
+  										// SEND MESSAGE(10)コマンド
+  
+  	// データ転送
+  	void FASTCALL Send();
+  										// データ送信
+- #ifndef RASCSI
+  	void FASTCALL SendNext();
+  										// データ送信継続
+- #endif	// RASCSI
+  	void FASTCALL Receive();
+  										// データ受信
+- #ifndef RASCSI
+  	void FASTCALL ReceiveNext();
+  										// データ受信継続
+! #endif	// RASCSI
+  	BOOL FASTCALL XferMsg(DWORD msg);
+  										// データ転送MSG
+  
+  	scsi_t scsi;
+  										// 内部データ
+--- 1182,1204 ----
+  										// SEND MESSAGE(10)コマンド
+  
+  	// データ転送
+  	void FASTCALL Send();
+  										// データ送信
+  	void FASTCALL SendNext();
+  										// データ送信継続
+  	void FASTCALL Receive();
+  										// データ受信
+  	void FASTCALL ReceiveNext();
+  										// データ受信継続
+! #if USE_BURST_BUS == 1
+! 	void FASTCALL SendBurst();
+! 										// Burst send
+! 	void FASTCALL ReceiveBurst();
+! 										// Burst receive
+! #endif	// USE_BURST_BUS
+! 
+  	BOOL FASTCALL XferMsg(DWORD msg);
+  										// データ転送MSG
+  
+  	scsi_t scsi;
+  										// 内部データ

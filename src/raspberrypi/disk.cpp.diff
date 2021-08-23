@@ -5130,7 +5130,7 @@
 ! 		case BUS::msgout:
 ! 			ctrl.message = ctrl.buffer[0];
 ! 			if (!XferMsg(ctrl.message)) {
-! 				// If message out fails, immediate BusFree
+! 				// If message out fails, immediate bus free
 ! 				BusFree();
 ! 				return;
 ! 			}
@@ -5206,7 +5206,7 @@
 ! 						// Reset
 ! 						Reset();
 ! 
-! 						// The latter BusFree
+! 						// The latter bus free
 ! 						BusFree();
 ! 						return;
 ! 					}
