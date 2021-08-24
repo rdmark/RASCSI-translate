@@ -1,0 +1,256 @@
+*** src/raspberrypi/sasidump.cpp	Sat Apr 11 22:53:08 2020
+--- src/raspberrypi/sasidump.cpp	Fri Mar 26 21:18:26 2021
+***************
+*** 1,12 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+! //	Copyright (C) 2016-2020 GIMONS
+  //	[ HDDダンプユーティリティ(イニシーエタモード/SASI Version) ]
+  //
+  //	SASI IMAGE EXAMPLE
+  //		X68000
+  //			10MB(10441728 BS=256 C=40788)
+--- 1,13 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+! //
+  //	[ HDDダンプユーティリティ(イニシーエタモード/SASI Version) ]
+  //
+  //	SASI IMAGE EXAMPLE
+  //		X68000
+  //			10MB(10441728 BS=256 C=40788)
+***************
+*** 17,37 ****
+  //			20MB(22437888 BS=1024 C=21912)
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "xm6.h"
+  #include "fileio.h"
+  #include "filepath.h"
+  #include "gpiobus.h"
+  
+  //---------------------------------------------------------------------------
+  //
+  //	定数宣言
+  //
+  //---------------------------------------------------------------------------
+! #define BUFSIZE 1024 * 64			// 64KBぐらいかなぁ
+  
+  //---------------------------------------------------------------------------
+  //
+  //	変数宣言
+  //
+--- 18,39 ----
+  //			20MB(22437888 BS=1024 C=21912)
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "rascsi.h"
+  #include "fileio.h"
+  #include "filepath.h"
++ #include "disk.h"
+  #include "gpiobus.h"
+  
+  //---------------------------------------------------------------------------
+  //
+  //	定数宣言
+  //
+  //---------------------------------------------------------------------------
+! #define BUFSIZE 1024 * 16			// 16KB
+  
+  //---------------------------------------------------------------------------
+  //
+  //	変数宣言
+  //
+***************
+*** 109,122 ****
+  	if (signal(SIGTERM, KillHandler) == SIG_ERR) {
+  		return FALSE;
+  	}
+  
+  	// GPIO初期化
+! 	if (!bus.Init(BUS::INITIATOR)) {
+  		return FALSE;
+  	}
+  
+  	// ワーク初期化
+  	targetid = -1;
+  	unitid = 0;
+  	bsiz = 256;
+  	bnum = -1;
+--- 111,127 ----
+  	if (signal(SIGTERM, KillHandler) == SIG_ERR) {
+  		return FALSE;
+  	}
+  
+  	// GPIO初期化
+! 	if (!bus.Init()) {
+  		return FALSE;
+  	}
+  
++ 	// イニシエータモードに設定
++ 	bus.SetMode(GPIOBUS::INITIATOR);
++ 
+  	// ワーク初期化
+  	targetid = -1;
+  	unitid = 0;
+  	bsiz = 256;
+  	bnum = -1;
+***************
+*** 270,279 ****
+--- 275,287 ----
+  BOOL Selection(int id)
+  {
+  	BYTE data;
+  	int count;
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// ID設定とSELアサート
+  	data = 0;
+  	data |= (1 << id);
+  	bus.SetDAT(data);
+  	bus.SetSEL(TRUE);
+***************
+*** 307,316 ****
+--- 315,327 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::command)) {
+  		return FALSE;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// コマンド送信
+  	count = bus.SendHandShake(buf, length);
+  
+  	// 送信結果が依頼数と同じなら成功
+  	if (count == length) {
+***************
+*** 331,340 ****
+--- 342,354 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::datain)) {
+  		return -1;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
++ 
+  	// データ受信
+  	return bus.ReceiveHandShake(buf, length);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 347,356 ****
+--- 361,373 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::dataout)) {
+  		return -1;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// データ受信
+  	return bus.SendHandShake(buf, length);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 365,374 ****
+--- 382,394 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::status)) {
+  		return -2;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
++ 
+  	// データ受信
+  	if (bus.ReceiveHandShake(buf, 1) == 1) {
+  		return (int)buf[0];
+  	}
+  
+***************
+*** 388,397 ****
+--- 408,420 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::msgin)) {
+  		return -2;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
++ 
+  	// データ受信
+  	if (bus.ReceiveHandShake(buf, 1) == 1) {
+  		return (int)buf[0];
+  	}
+  
+***************
+*** 530,540 ****
+  	// COMMAND
+  	memset(cmd, 0x00, 10);
+  	cmd[0] = 0x8;
+  	cmd[1] = (BYTE)(bstart >> 16);
+  	cmd[1] &= 0x1f;
+! 	cmd[1] = unitid << 5;
+  	cmd[2] = (BYTE)(bstart >> 8);
+  	cmd[3] = (BYTE)bstart;
+  	cmd[4] = (BYTE)blength;
+  	if (!Command(cmd, 6)) {
+  		result = -2;
+--- 553,563 ----
+  	// COMMAND
+  	memset(cmd, 0x00, 10);
+  	cmd[0] = 0x8;
+  	cmd[1] = (BYTE)(bstart >> 16);
+  	cmd[1] &= 0x1f;
+! 	cmd[1] |= unitid << 5;
+  	cmd[2] = (BYTE)(bstart >> 8);
+  	cmd[3] = (BYTE)bstart;
+  	cmd[4] = (BYTE)blength;
+  	if (!Command(cmd, 6)) {
+  		result = -2;
+***************
+*** 595,605 ****
+  	// COMMAND
+  	memset(cmd, 0x00, 10);
+  	cmd[0] = 0xa;
+  	cmd[1] = (BYTE)(bstart >> 16);
+  	cmd[1] &= 0x1f;
+! 	cmd[1] = unitid << 5;
+  	cmd[2] = (BYTE)(bstart >> 8);
+  	cmd[3] = (BYTE)bstart;
+  	cmd[4] = (BYTE)blength;
+  	if (!Command(cmd, 6)) {
+  		result = -2;
+--- 618,628 ----
+  	// COMMAND
+  	memset(cmd, 0x00, 10);
+  	cmd[0] = 0xa;
+  	cmd[1] = (BYTE)(bstart >> 16);
+  	cmd[1] &= 0x1f;
+! 	cmd[1] |= unitid << 5;
+  	cmd[2] = (BYTE)(bstart >> 8);
+  	cmd[3] = (BYTE)bstart;
+  	cmd[4] = (BYTE)blength;
+  	if (!Command(cmd, 6)) {
+  		result = -2;

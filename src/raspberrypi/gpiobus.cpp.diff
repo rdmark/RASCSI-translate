@@ -1,0 +1,2349 @@
+*** src/raspberrypi/gpiobus.cpp	Sat Apr 11 22:56:02 2020
+--- src/raspberrypi/gpiobus.cpp	Fri Mar 26 21:17:56 2021
+***************
+*** 1,21 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+- //	Copyright (C) 2016-2020 GIMONS
+  //
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+  //	[ GPIO-SCSIバス ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "xm6.h"
+  #include "gpiobus.h"
+  
+  #ifndef BAREMETAL
+  #ifdef __linux__
+  //---------------------------------------------------------------------------
+--- 1,21 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+  //
++ //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+  //	[ GPIO-SCSIバス ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "rascsi.h"
+! #include "disk.h"
+  #include "gpiobus.h"
+  
+  #ifndef BAREMETAL
+  #ifdef __linux__
+  //---------------------------------------------------------------------------
+***************
+*** 80,96 ****
+  }
+  #endif	// __NetBSD__
+  #endif	// BAREMETAL
+  
+  #ifdef BAREMETAL
+! // IOベースアドレス
+  extern uint32_t RPi_IO_Base_Addr;
+  
+- // コア周波数
+- extern uint32_t RPi_Core_Freq;
+- 
+- #ifdef USE_SEL_EVENT_ENABLE 
+  //---------------------------------------------------------------------------
+  //
+  //	割り込み制御関数
+  //
+  //---------------------------------------------------------------------------
+--- 80,99 ----
+  }
+  #endif	// __NetBSD__
+  #endif	// BAREMETAL
+  
+  #ifdef BAREMETAL
+! //---------------------------------------------------------------------------
+! //
+! //	RPI basic information
+! //
+! //---------------------------------------------------------------------------
+! extern "C" {
+  extern uint32_t RPi_IO_Base_Addr;
++ extern uint32_t ARM_getcorespeed();
++ }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	割り込み制御関数
+  //
+  //---------------------------------------------------------------------------
+***************
+*** 111,133 ****
+  void IrqHandler()
+  {
+  	// 割り込みクリア
+  	self->ClearSelectEvent();
+  }
+- #endif	// USE_SEL_EVENT_ENABLE
+  #endif	// BAREMETAL
+  
+  //---------------------------------------------------------------------------
+  //
+  //	コンストラクタ
+  //
+  //---------------------------------------------------------------------------
+  GPIOBUS::GPIOBUS()
+  {
+! #if defined(USE_SEL_EVENT_ENABLE) && defined(BAREMETAL)
+  	self = this;
+! #endif	// USE_SEL_EVENT_ENABLE && BAREMETAL
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	デストラクタ
+--- 114,135 ----
+  void IrqHandler()
+  {
+  	// 割り込みクリア
+  	self->ClearSelectEvent();
+  }
+  #endif	// BAREMETAL
+  
+  //---------------------------------------------------------------------------
+  //
+  //	コンストラクタ
+  //
+  //---------------------------------------------------------------------------
+  GPIOBUS::GPIOBUS()
+  {
+! #ifdef BAREMETAL
+  	self = this;
+! #endif	// BAREMETAL
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	デストラクタ
+***************
+*** 140,164 ****
+  //---------------------------------------------------------------------------
+  //
+  //	初期化
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::Init(mode_e mode)
+  {
+  	void *map;
+  	int i;
+  	int j;
+  	int pullmode;
+  #ifndef BAREMETAL
+  	int fd;
+! #ifdef USE_SEL_EVENT_ENABLE
+! 	struct epoll_event ev;
+! #endif	// USE_SEL_EVENT_ENABLE
+! #endif	// BAREMETAL
+  
+! 	// 動作モードの保存
+! 	actmode = mode;
+  
+  #ifdef BAREMETAL
+  	// ベースアドレスの取得
+  	baseaddr = RPi_IO_Base_Addr;
+  	map = (void*)baseaddr;
+--- 142,164 ----
+  //---------------------------------------------------------------------------
+  //
+  //	初期化
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::Init()
+  {
+  	void *map;
+  	int i;
+  	int j;
+  	int pullmode;
+  #ifndef BAREMETAL
+  	int fd;
+! 	struct epoll_event ev[2];
+! #endif	// !BAREMETAL
+  
+! 	// The action mode's default is target
+! 	actmode = mode_e::TARGET;
+  
+  #ifdef BAREMETAL
+  	// ベースアドレスの取得
+  	baseaddr = RPi_IO_Base_Addr;
+  	map = (void*)baseaddr;
+***************
+*** 177,187 ****
+  		PROT_READ | PROT_WRITE, MAP_SHARED, fd, baseaddr);
+  	if (map == MAP_FAILED) {
+  		close(fd);
+  		return FALSE;
+  	}
+! #endif
+  	// ベースアドレスからラズパイのタイプを決定
+  	if (baseaddr == 0xfe000000) {
+  		rpitype = 4;
+  	} else if (baseaddr == 0x3f000000) {
+  		rpitype = 2;
+--- 177,188 ----
+  		PROT_READ | PROT_WRITE, MAP_SHARED, fd, baseaddr);
+  	if (map == MAP_FAILED) {
+  		close(fd);
+  		return FALSE;
+  	}
+! #endif	// BAREMETAL
+! 
+  	// ベースアドレスからラズパイのタイプを決定
+  	if (baseaddr == 0xfe000000) {
+  		rpitype = 4;
+  	} else if (baseaddr == 0x3f000000) {
+  		rpitype = 2;
+***************
+*** 196,205 ****
+--- 197,210 ----
+  
+  	// PADS
+  	pads = (DWORD *)map;
+  	pads += PADS_OFFSET / sizeof(DWORD);
+  
++ 	// Clock manager
++ 	cm = (DWORD *)map;
++ 	cm += CM_OFFSET / sizeof(DWORD);
++ 
+  	// システムタイマ
+  	SysTimer::Init(
+  		(DWORD *)map + SYST_OFFSET / sizeof(DWORD),
+  		(DWORD *)map + ARMT_OFFSET / sizeof(DWORD));
+  
+***************
+*** 209,219 ****
+  
+  #ifndef BAREMETAL
+  	// Quad-A7 control
+  	qa7regs = (DWORD *)map;
+  	qa7regs += QA7_OFFSET / sizeof(DWORD);
+! #endif	// BAREMETAL
+  
+  #ifdef BAREMETAL
+  	// GICのメモリをマップ
+  	if (rpitype == 4) {
+  		map = (void*)ARM_GICD_BASE;
+--- 214,224 ----
+  
+  #ifndef BAREMETAL
+  	// Quad-A7 control
+  	qa7regs = (DWORD *)map;
+  	qa7regs += QA7_OFFSET / sizeof(DWORD);
+! #endif	// !BAREMETAL
+  
+  #ifdef BAREMETAL
+  	// GICのメモリをマップ
+  	if (rpitype == 4) {
+  		map = (void*)ARM_GICD_BASE;
+***************
+*** 246,256 ****
+  	// Drive Strengthを16mAに設定
+  	DrvConfig(7);
+  
+  	// プルアップ/プルダウンを設定
+  #if SIGNAL_CONTROL_MODE == 0
+! 	pullmode = GPIO_PULLNONE;
+  #elif SIGNAL_CONTROL_MODE == 1
+  	pullmode = GPIO_PULLUP;
+  #else
+  	pullmode = GPIO_PULLDOWN;
+  #endif
+--- 251,261 ----
+  	// Drive Strengthを16mAに設定
+  	DrvConfig(7);
+  
+  	// プルアップ/プルダウンを設定
+  #if SIGNAL_CONTROL_MODE == 0
+! 	pullmode = GPIO_PULLUP;
+  #elif SIGNAL_CONTROL_MODE == 1
+  	pullmode = GPIO_PULLUP;
+  #else
+  	pullmode = GPIO_PULLDOWN;
+  #endif
+***************
+*** 280,375 ****
+  	// GPFSELバックアップ
+  	gpfsel[0] = gpio[GPIO_FSEL_0];
+  	gpfsel[1] = gpio[GPIO_FSEL_1];
+  	gpfsel[2] = gpio[GPIO_FSEL_2];
+  	gpfsel[3] = gpio[GPIO_FSEL_3];
+  
+  	// SEL信号割り込み初期化
+- #ifdef USE_SEL_EVENT_ENABLE
+  #ifndef BAREMETAL
+  	// GPIOチップオープン
+  	fd = open("/dev/gpiochip0", 0);
+  	if (fd == -1) {
+  		return FALSE;
+  	}
+  
+  	// イベント要求設定
+! 	strcpy(selevreq.consumer_label, "RaSCSI");
+  	selevreq.lineoffset = PIN_SEL;
+  	selevreq.handleflags = GPIOHANDLE_REQUEST_INPUT;
+  #if SIGNAL_CONTROL_MODE < 2
+  	selevreq.eventflags = GPIOEVENT_REQUEST_FALLING_EDGE;
+  #else
+  	selevreq.eventflags = GPIOEVENT_REQUEST_RISING_EDGE;
+  #endif	// SIGNAL_CONTROL_MODE
+  
+  	// イベント要求取得
+  	if (ioctl(fd, GPIO_GET_LINEEVENT_IOCTL, &selevreq) == -1) {
+  		close(fd);
+  		return FALSE;
+  	}
+  
+  	// GPIOチップクローズ
+  	close(fd);
+  
+  	// epoll初期化
+! 	epfd = epoll_create(1);
+! 	memset(&ev, 0, sizeof(ev));
+! 	ev.events = EPOLLIN | EPOLLPRI;
+! 	ev.data.fd = selevreq.fd;
+! 	epoll_ctl(epfd, EPOLL_CTL_ADD, selevreq.fd, &ev);
+  #else
+  	// エッジ検出設定
+  #if SIGNAL_CONTROL_MODE == 2
+! 	gpio[GPIO_AREN_0] = 1 << PIN_SEL;
+  #else
+! 	gpio[GPIO_AFEN_0] = 1 << PIN_SEL;
+  #endif	// SIGNAL_CONTROL_MODE
+  
+  	// イベントクリア
+! 	gpio[GPIO_EDS_0] = 1 << PIN_SEL;
+  
+  	// 割り込みハンドラ登録
+  	setIrqFuncAddress(IrqHandler);
+  
+  	// GPIO割り込み設定
+  	if (rpitype == 4) {
+- 		// GIC無効
+- 		gicd[GICD_CTLR] = 0;
+- 
+- 		// 全ての割り込みをコア0にルーティング
+- 		for (i = 0; i < 8; i++) {
+- 			gicd[GICD_ICENABLER0 + i] = 0xffffffff;
+- 			gicd[GICD_ICPENDR0 + i] = 0xffffffff;
+- 			gicd[GICD_ICACTIVER0 + i] = 0xffffffff;
+- 		}
+- 		for (i = 0; i < 64; i++) {
+- 			gicd[GICD_IPRIORITYR0 + i] = 0xa0a0a0a0;
+- 			gicd[GICD_ITARGETSR0 + i] = 0x01010101;
+- 		}
+- 
+- 		// 全ての割り込みをレベルトリガに設定
+- 		for (i = 0; i < 16; i++) {
+- 			gicd[GICD_ICFGR0 + i] = 0;
+- 		}
+- 
+- 		// GIC無効
+- 		gicd[GICD_CTLR] = 1;
+- 
+- 		// コア0のCPUインターフェスを有効にする
+- 		gicc[GICC_PMR] = 0xf0;
+- 		gicc[GICC_CTLR] = 1;
+- 
+  		// 割り込み有効
+  		gicd[GICD_ISENABLER0 + (GIC_GPIO_IRQ / 32)] =
+  			1 << (GIC_GPIO_IRQ % 32);
+  	} else {
+  		// 割り込み有効
+  		irpctl[IRPT_ENB_IRQ_2] = (1 << (GPIO_IRQ % 32));
+  	}
+! #endif	// BAREMETAL
+! #endif	// USE_SEL_EVENT_ENABLE
+  
+  	// ワークテーブル作成
+  	MakeTable();
+  
+  	// 最後にENABLEをオン
+--- 285,388 ----
+  	// GPFSELバックアップ
+  	gpfsel[0] = gpio[GPIO_FSEL_0];
+  	gpfsel[1] = gpio[GPIO_FSEL_1];
+  	gpfsel[2] = gpio[GPIO_FSEL_2];
+  	gpfsel[3] = gpio[GPIO_FSEL_3];
++ 	gpfsel[4] = gpio[GPIO_FSEL_4];
++ 	gpfsel[5] = gpio[GPIO_FSEL_5];
+  
+  	// SEL信号割り込み初期化
+  #ifndef BAREMETAL
+  	// GPIOチップオープン
+  	fd = open("/dev/gpiochip0", 0);
+  	if (fd == -1) {
+  		return FALSE;
+  	}
+  
+  	// イベント要求設定
+! 	strcpy(selevreq.consumer_label, "RaSCSI SELECT");
+  	selevreq.lineoffset = PIN_SEL;
+  	selevreq.handleflags = GPIOHANDLE_REQUEST_INPUT;
+  #if SIGNAL_CONTROL_MODE < 2
+  	selevreq.eventflags = GPIOEVENT_REQUEST_FALLING_EDGE;
+  #else
+  	selevreq.eventflags = GPIOEVENT_REQUEST_RISING_EDGE;
+  #endif	// SIGNAL_CONTROL_MODE
+  
++ 	strcpy(rstevreq.consumer_label, "RaSCSI RESET");
++ 	rstevreq.lineoffset = PIN_RST;
++ 	rstevreq.handleflags = GPIOHANDLE_REQUEST_INPUT;
++ #if SIGNAL_CONTROL_MODE < 2
++ 	rstevreq.eventflags = GPIOEVENT_REQUEST_FALLING_EDGE;
++ #else
++ 	rstevreq.eventflags = GPIOEVENT_REQUEST_RISING_EDGE;
++ #endif	// SIGNAL_CONTROL_MODE
++ 
+  	// イベント要求取得
+  	if (ioctl(fd, GPIO_GET_LINEEVENT_IOCTL, &selevreq) == -1) {
+  		close(fd);
+  		return FALSE;
+  	}
+  
++ 	if (ioctl(fd, GPIO_GET_LINEEVENT_IOCTL, &rstevreq) == -1) {
++ 		close(fd);
++ 		return FALSE;
++ 	}
++ 
+  	// GPIOチップクローズ
+  	close(fd);
+  
+  	// epoll初期化
+! 	epfd = epoll_create(2);
+! 	memset(&ev[0], 0, sizeof(struct epoll_event));
+! 	ev[0].events = EPOLLIN | EPOLLPRI;
+! 	ev[0].data.fd = selevreq.fd;
+! 	epoll_ctl(epfd, EPOLL_CTL_ADD, selevreq.fd, &ev[0]);
+! 
+! 	memset(&ev[1], 0, sizeof(struct epoll_event));
+! 	ev[1].events = EPOLLIN | EPOLLPRI;
+! 	ev[1].data.fd = rstevreq.fd;
+! 	epoll_ctl(epfd, EPOLL_CTL_ADD, selevreq.fd, &ev[1]);
+! 
+! 	// Configure real time class scheduler parameters
+! 	rttime[0] = '\0';
+! 	fd = open(PATH_RTTIME, O_RDWR | O_SYNC);
+! 	if (fd >= 0) {
+! 		read(fd, rttime, 20);
+! 		close(fd);
+! 
+! 		// Remove the CPU time limit
+! 		fd = open(PATH_RTTIME, O_RDWR | O_SYNC);
+! 		if (fd >= 0) {
+! 			write(fd, "-1", 2);
+! 			close(fd);
+! 		}
+! 	}
+  #else
+  	// エッジ検出設定
+  #if SIGNAL_CONTROL_MODE == 2
+! 	gpio[GPIO_AREN_0] = (1 << PIN_SEL) | (1 << PIN_RST);
+  #else
+! 	gpio[GPIO_AFEN_0] = (1 << PIN_SEL) | (1 << PIN_RST);
+  #endif	// SIGNAL_CONTROL_MODE
+  
+  	// イベントクリア
+! 	gpio[GPIO_EDS_0] = (1 << PIN_SEL) | (1 << PIN_RST);
+  
+  	// 割り込みハンドラ登録
+  	setIrqFuncAddress(IrqHandler);
+  
+  	// GPIO割り込み設定
+  	if (rpitype == 4) {
+  		// 割り込み有効
+  		gicd[GICD_ISENABLER0 + (GIC_GPIO_IRQ / 32)] =
+  			1 << (GIC_GPIO_IRQ % 32);
+  	} else {
+  		// 割り込み有効
+  		irpctl[IRPT_ENB_IRQ_2] = (1 << (GPIO_IRQ % 32));
+  	}
+! #endif	// !BAREMETAL
+  
+  	// ワークテーブル作成
+  	MakeTable();
+  
+  	// 最後にENABLEをオン
+***************
+*** 378,401 ****
+  	return TRUE;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	クリーンアップ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL GPIOBUS::Cleanup()
+  {
+  	int i;
+  	int pin;
+  
+- 	// SEL信号割り込み解放
+- #ifdef USE_SEL_EVENT_ENABLE
+  #ifndef BAREMETAL
+  	close(selevreq.fd);
+! #endif	// BAREMETAL
+! #endif	// USE_SEL_EVENT_ENABLE
+  
+  	// 制御信号を設定
+  	PinSetSignal(PIN_ENB, FALSE);
+  	PinSetSignal(PIN_ACT, FALSE);
+  	PinSetSignal(PIN_TAD, FALSE);
+--- 391,436 ----
+  	return TRUE;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
++ //	Action mode settings
++ //
++ //---------------------------------------------------------------------------
++ void FASTCALL GPIOBUS::SetMode(mode_e mode)
++ {
++ 	// Save the action mode
++ 	actmode = mode;
++ }
++ 
++ //---------------------------------------------------------------------------
++ //
+  //	クリーンアップ
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL GPIOBUS::Cleanup()
+  {
+  	int i;
++ #ifndef BAREMETAL
++ 	int fd;
++ #endif	// !BAREMETAL
+  	int pin;
+  
+  #ifndef BAREMETAL
++ 	// Release the SEL signal interrupt
+  	close(selevreq.fd);
+! 	close(rstevreq.fd);
+! 
+! 	// Restore the real time class scheduler parameter settings
+! 	if (rttime[0] != '\0') {
+! 		fd = open(PATH_RTTIME, O_RDWR | O_SYNC);
+! 		if (fd >= 0) {
+! 			write(fd, rttime, strlen(rttime));
+! 			close(fd);
+! 		}
+! 	}
+! #endif	// !BAREMETAL
+  
+  	// 制御信号を設定
+  	PinSetSignal(PIN_ENB, FALSE);
+  	PinSetSignal(PIN_ACT, FALSE);
+  	PinSetSignal(PIN_TAD, FALSE);
+***************
+*** 468,477 ****
+--- 503,523 ----
+  		SetMode(PIN_DT4, IN);
+  		SetMode(PIN_DT5, IN);
+  		SetMode(PIN_DT6, IN);
+  		SetMode(PIN_DT7, IN);
+  		SetMode(PIN_DP, IN);
++ 
++ #if USE_SYNC_TRANS == 1
++ 		// GPCLK settings
++ 		// PLLD = 6 3B:500 MHz 4:750 MHz
++ 		// 5MHz output settings
++ 		i = rpitype == 4 ? (750 / 5) * 1 : (500 / 5) * 1;
++ 		PinConfig(PIN_GPCLK, GPIO_ALT0);
++ 		cm[CM_GPCTL] = CM_PASSWORD | CM_KILL | CM_SRC_PLLDPER;
++ 		cm[CM_GPDIV] = CM_PASSWORD | CM_DIVI(i);
++ 		cm[CM_GPCTL] = CM_PASSWORD | CM_ENAB | CM_SRC_PLLDPER;
++ #endif	// USE_SYNC_TRANS == 1
+  	} else {
+  		// イニシエータモード
+  
+  		// ターゲット信号を入力に設定
+  		SetControl(PIN_TAD, TAD_IN);
+***************
+*** 505,518 ****
+  	signals = 0;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	バス信号取り込み
+  //
+  //---------------------------------------------------------------------------
+! DWORD FASTCALL GPIOBUS::Aquire()
+  {
+  	signals = *level;
+  
+  #if SIGNAL_CONTROL_MODE < 2
+  	// 負論理なら反転する(内部処理は正論理に統一)
+--- 551,597 ----
+  	signals = 0;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
++ //	Reverse the data signal direction
++ //
++ //---------------------------------------------------------------------------
++ void FASTCALL GPIOBUS::SetDataDirection(datadir_e dir)
++ {
++ 	if (dir == DATA_DIR_IN) {
++ 		SetControl(PIN_DTD, DTD_IN);
++ 		SetDAT(0);
++ 		SetMode(PIN_DT0, IN);
++ 		SetMode(PIN_DT1, IN);
++ 		SetMode(PIN_DT2, IN);
++ 		SetMode(PIN_DT3, IN);
++ 		SetMode(PIN_DT4, IN);
++ 		SetMode(PIN_DT5, IN);
++ 		SetMode(PIN_DT6, IN);
++ 		SetMode(PIN_DT7, IN);
++ 		SetMode(PIN_DP, IN);
++ 	} else {
++ 		SetControl(PIN_DTD, DTD_OUT);
++ 		SetMode(PIN_DT0, OUT);
++ 		SetMode(PIN_DT1, OUT);
++ 		SetMode(PIN_DT2, OUT);
++ 		SetMode(PIN_DT3, OUT);
++ 		SetMode(PIN_DT4, OUT);
++ 		SetMode(PIN_DT5, OUT);
++ 		SetMode(PIN_DT6, OUT);
++ 		SetMode(PIN_DT7, OUT);
++ 		SetMode(PIN_DP, OUT);
++ 	}
++ }
++ 
++ //---------------------------------------------------------------------------
++ //
+  //	バス信号取り込み
+  //
+  //---------------------------------------------------------------------------
+! DWORD FASTCALL GPIOBUS::Aquire() const
+  {
+  	signals = *level;
+  
+  #if SIGNAL_CONTROL_MODE < 2
+  	// 負論理なら反転する(内部処理は正論理に統一)
+***************
+*** 535,545 ****
+  //---------------------------------------------------------------------------
+  //
+  //	BSYシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetBSY()
+  {
+  	return GetSignal(PIN_BSY);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 614,624 ----
+  //---------------------------------------------------------------------------
+  //
+  //	BSYシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetBSY() const
+  {
+  	return GetSignal(PIN_BSY);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 584,594 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SELシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetSEL()
+  {
+  	return GetSignal(PIN_SEL);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 663,673 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SELシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetSEL() const
+  {
+  	return GetSignal(PIN_SEL);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 610,620 ****
+  //---------------------------------------------------------------------------
+  //
+  //	ATNシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetATN()
+  {
+  	return GetSignal(PIN_ATN);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 689,699 ----
+  //---------------------------------------------------------------------------
+  //
+  //	ATNシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetATN() const
+  {
+  	return GetSignal(PIN_ATN);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 630,640 ****
+  //---------------------------------------------------------------------------
+  //
+  //	ACKシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetACK()
+  {
+  	return GetSignal(PIN_ACK);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 709,719 ----
+  //---------------------------------------------------------------------------
+  //
+  //	ACKシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetACK() const
+  {
+  	return GetSignal(PIN_ACK);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 650,660 ****
+  //---------------------------------------------------------------------------
+  //
+  //	RSTシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetRST()
+  {
+  	return GetSignal(PIN_RST);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 729,739 ----
+  //---------------------------------------------------------------------------
+  //
+  //	RSTシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetRST() const
+  {
+  	return GetSignal(PIN_RST);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 670,680 ****
+  //---------------------------------------------------------------------------
+  //
+  //	MSGシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetMSG()
+  {
+  	return GetSignal(PIN_MSG);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 749,759 ----
+  //---------------------------------------------------------------------------
+  //
+  //	MSGシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetMSG() const
+  {
+  	return GetSignal(PIN_MSG);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 690,700 ****
+  //---------------------------------------------------------------------------
+  //
+  //	CDシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetCD()
+  {
+  	return GetSignal(PIN_CD);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 769,779 ----
+  //---------------------------------------------------------------------------
+  //
+  //	CDシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetCD() const
+  {
+  	return GetSignal(PIN_CD);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 710,752 ****
+  //---------------------------------------------------------------------------
+  //
+  //	IOシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetIO()
+  {
+! 	BOOL ast;
+! 	ast = GetSignal(PIN_IO);
+! 
+! 	if (actmode == INITIATOR) {
+! 		// IO信号によってデータの入出力方向を変更
+! 		if (ast) {
+! 			SetControl(PIN_DTD, DTD_IN);
+! 			SetMode(PIN_DT0, IN);
+! 			SetMode(PIN_DT1, IN);
+! 			SetMode(PIN_DT2, IN);
+! 			SetMode(PIN_DT3, IN);
+! 			SetMode(PIN_DT4, IN);
+! 			SetMode(PIN_DT5, IN);
+! 			SetMode(PIN_DT6, IN);
+! 			SetMode(PIN_DT7, IN);
+! 			SetMode(PIN_DP, IN);
+! 		} else {
+! 			SetControl(PIN_DTD, DTD_OUT);
+! 			SetMode(PIN_DT0, OUT);
+! 			SetMode(PIN_DT1, OUT);
+! 			SetMode(PIN_DT2, OUT);
+! 			SetMode(PIN_DT3, OUT);
+! 			SetMode(PIN_DT4, OUT);
+! 			SetMode(PIN_DT5, OUT);
+! 			SetMode(PIN_DT6, OUT);
+! 			SetMode(PIN_DT7, OUT);
+! 			SetMode(PIN_DP, OUT);
+! 		}
+! 	}
+! 
+! 	return ast;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	IOシグナル設定
+--- 789,801 ----
+  //---------------------------------------------------------------------------
+  //
+  //	IOシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetIO() const
+  {
+! 	return GetSignal(PIN_IO);
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	IOシグナル設定
+***************
+*** 757,798 ****
+  	SetSignal(PIN_IO, ast);
+  
+  	if (actmode == TARGET) {
+  		// IO信号によってデータの入出力方向を変更
+  		if (ast) {
+! 			SetControl(PIN_DTD, DTD_OUT);
+! 			SetDAT(0);
+! 			SetMode(PIN_DT0, OUT);
+! 			SetMode(PIN_DT1, OUT);
+! 			SetMode(PIN_DT2, OUT);
+! 			SetMode(PIN_DT3, OUT);
+! 			SetMode(PIN_DT4, OUT);
+! 			SetMode(PIN_DT5, OUT);
+! 			SetMode(PIN_DT6, OUT);
+! 			SetMode(PIN_DT7, OUT);
+! 			SetMode(PIN_DP, OUT);
+  		} else {
+! 			SetControl(PIN_DTD, DTD_IN);
+! 			SetMode(PIN_DT0, IN);
+! 			SetMode(PIN_DT1, IN);
+! 			SetMode(PIN_DT2, IN);
+! 			SetMode(PIN_DT3, IN);
+! 			SetMode(PIN_DT4, IN);
+! 			SetMode(PIN_DT5, IN);
+! 			SetMode(PIN_DT6, IN);
+! 			SetMode(PIN_DT7, IN);
+! 			SetMode(PIN_DP, IN);
+  		}
+  	}
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	REQシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetREQ()
+  {
+  	return GetSignal(PIN_REQ);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 806,828 ----
+  	SetSignal(PIN_IO, ast);
+  
+  	if (actmode == TARGET) {
+  		// IO信号によってデータの入出力方向を変更
+  		if (ast) {
+! 			SetDataDirection(DATA_DIR_OUT);
+  		} else {
+! 			SetDataDirection(DATA_DIR_IN);
+  		}
+  	}
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	REQシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetREQ() const
+  {
+  	return GetSignal(PIN_REQ);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 808,822 ****
+  //---------------------------------------------------------------------------
+  //
+  //	データシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BYTE FASTCALL GPIOBUS::GetDAT()
+  {
+  	DWORD data;
+  
+! 	data = Aquire();
+  	data =
+  		((data >> (PIN_DT0 - 0)) & (1 << 0)) |
+  		((data >> (PIN_DT1 - 1)) & (1 << 1)) |
+  		((data >> (PIN_DT2 - 2)) & (1 << 2)) |
+  		((data >> (PIN_DT3 - 3)) & (1 << 3)) |
+--- 838,852 ----
+  //---------------------------------------------------------------------------
+  //
+  //	データシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BYTE FASTCALL GPIOBUS::GetDAT() const
+  {
+  	DWORD data;
+  
+! 	data = signals;
+  	data =
+  		((data >> (PIN_DT0 - 0)) & (1 << 0)) |
+  		((data >> (PIN_DT1 - 1)) & (1 << 1)) |
+  		((data >> (PIN_DT2 - 2)) & (1 << 2)) |
+  		((data >> (PIN_DT3 - 3)) & (1 << 3)) |
+***************
+*** 864,881 ****
+  	}
+  #else
+  	gpio[GPIO_CLR_0] = tblDatMsk[dat];
+  	gpio[GPIO_SET_0] = tblDatSet[dat];
+  #endif	// SIGNAL_CONTROL_MODE
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データパリティシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetDP()
+  {
+  	return GetSignal(PIN_DP);
+  }
+  
+  //---------------------------------------------------------------------------
+--- 894,914 ----
+  	}
+  #else
+  	gpio[GPIO_CLR_0] = tblDatMsk[dat];
+  	gpio[GPIO_SET_0] = tblDatSet[dat];
+  #endif	// SIGNAL_CONTROL_MODE
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	データパリティシグナル取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetDP() const
+  {
+  	return GetSignal(PIN_DP);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 902,917 ****
+  
+  	// REQアサート
+  	SetSignal(PIN_REQ, ON);
+  
+  	// ACKアサート待ち
+! 	ret = WaitSignal(PIN_ACK, TRUE);
+  
+  	// 信号線が安定するまでウェイト
+! 	SysTimer::SleepNsec(GPIO_DATA_SETTLING);
+  
+  	// データ取得
+  	*buf = GetDAT();
+  
+  	// REQネゲート
+  	SetSignal(PIN_REQ, OFF);
+  
+--- 935,951 ----
+  
+  	// REQアサート
+  	SetSignal(PIN_REQ, ON);
+  
+  	// ACKアサート待ち
+! 	ret = WaitSignal(PIN_ACK, ON);
+  
+  	// 信号線が安定するまでウェイト
+! 	DelayBits();
+  
+  	// データ取得
++ 	Aquire();
+  	*buf = GetDAT();
+  
+  	// REQネゲート
+  	SetSignal(PIN_REQ, OFF);
+  
+***************
+*** 919,929 ****
+  	if (!ret) {
+  		goto irq_enable_exit;
+  	}
+  
+  	// ACKネゲート待ち
+! 	ret = WaitSignal(PIN_ACK, FALSE);
+  
+  	// ACKネゲート待ちでタイムアウト
+  	if (!ret) {
+  		goto irq_enable_exit;
+  	}
+--- 953,963 ----
+  	if (!ret) {
+  		goto irq_enable_exit;
+  	}
+  
+  	// ACKネゲート待ち
+! 	ret = WaitSignal(PIN_ACK, OFF);
+  
+  	// ACKネゲート待ちでタイムアウト
+  	if (!ret) {
+  		goto irq_enable_exit;
+  	}
+***************
+*** 941,956 ****
+  	for (i = 1; i < count; i++) {
+  		// REQアサート
+  		SetSignal(PIN_REQ, ON);
+  
+  		// ACKアサート待ち
+! 		ret = WaitSignal(PIN_ACK, TRUE);
+  
+  		// 信号線が安定するまでウェイト
+! 		SysTimer::SleepNsec(GPIO_DATA_SETTLING);
+  
+  		// データ取得
+  		*buf = GetDAT();
+  
+  		// REQネゲート
+  		SetSignal(PIN_REQ, OFF);
+  
+--- 975,991 ----
+  	for (i = 1; i < count; i++) {
+  		// REQアサート
+  		SetSignal(PIN_REQ, ON);
+  
+  		// ACKアサート待ち
+! 		ret = WaitSignal(PIN_ACK, ON);
+  
+  		// 信号線が安定するまでウェイト
+! 		DelayBits();
+  
+  		// データ取得
++ 		Aquire();
+  		*buf = GetDAT();
+  
+  		// REQネゲート
+  		SetSignal(PIN_REQ, OFF);
+  
+***************
+*** 958,968 ****
+  		if (!ret) {
+  			break;
+  		}
+  
+  		// ACKネゲート待ち
+! 		ret = WaitSignal(PIN_ACK, FALSE);
+  
+  		// ACKネゲート待ちでタイムアウト
+  		if (!ret) {
+  			break;
+  		}
+--- 993,1003 ----
+  		if (!ret) {
+  			break;
+  		}
+  
+  		// ACKネゲート待ち
+! 		ret = WaitSignal(PIN_ACK, OFF);
+  
+  		// ACKネゲート待ちでタイムアウト
+  		if (!ret) {
+  			break;
+  		}
+***************
+*** 979,1062 ****
+  	return i;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	データ受信ハンドシェイク
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::ReceiveHandShake(BYTE *buf, int count)
+  {
+  	int i;
+  	BOOL ret;
+  	DWORD phase;
+  
+  	// IRQ無効
+  	DisableIRQ();
+  
+  	if (actmode == TARGET) {
+  		for (i = 0; i < count; i++) {
+  			// REQアサート
+  			SetSignal(PIN_REQ, ON);
+  
+  			// ACKアサート待ち
+! 			ret = WaitSignal(PIN_ACK, TRUE);
+! 
+! 			// 信号線が安定するまでウェイト
+! 			SysTimer::SleepNsec(GPIO_DATA_SETTLING);
+! 
+! 			// データ取得
+! 			*buf = GetDAT();
+  
+  			// REQネゲート
+  			SetSignal(PIN_REQ, OFF);
+  
+  			// ACKアサート待ちでタイムアウト
+  			if (!ret) {
+  				break;
+  			}
+  
+- 			// ACKネゲート待ち
+- 			ret = WaitSignal(PIN_ACK, FALSE);
+- 
+- 			// ACKネゲート待ちでタイムアウト
+- 			if (!ret) {
+- 				break;
+- 			}
+- 
+  			// 次データへ
+  			buf++;
+  		}
+  	} else {
+  		// フェーズ取得
+  		phase = Aquire() & GPIO_MCI;
+  
+  		for (i = 0; i < count; i++) {
+! 			// REQアサート待ち
+! 			ret = WaitSignal(PIN_REQ, TRUE);
+  
+! 			// REQアサート待ちでタイムアウト
+! 			if (!ret) {
+  				break;
+  			}
+  
+  			// フェーズエラー
+  			if ((signals & GPIO_MCI) != phase) {
+  				break;
+  			}
+  
+! 			// 信号線が安定するまでウェイト
+! 			SysTimer::SleepNsec(GPIO_DATA_SETTLING);
+! 
+! 			// データ取得
+! 			*buf = GetDAT();
+  
+  			// ACKアサート
+  			SetSignal(PIN_ACK, ON);
+  
+  			// REQネゲート待ち
+! 			ret = WaitSignal(PIN_REQ, FALSE);
+  
+  			// ACKネゲート
+  			SetSignal(PIN_ACK, OFF);
+  
+  			// REQネゲート待ちでタイムアウト
+--- 1014,1102 ----
+  	return i;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	Batch data send handshake
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::SendHandShake(BYTE *buf, int count, int syncoffset)
+  {
+  	int i;
+  	BOOL ret;
+  	DWORD phase;
+  
++ #if USE_SYNC_TRANS == 1
++ 	// Sync transfer
++ 	if (actmode == TARGET && syncoffset > 0) {
++ 		return SendSyncTransfer(buf, count, syncoffset);
++ 	}
++ #endif	// USE_SYNC_TRANS == 1
++ 
+  	// Disable IRQ
+  	DisableIRQ();
+  
+  	if (actmode == TARGET) {
+  		for (i = 0; i < count; i++) {
++ 			// Data settings
++ 			SetDAT(*buf);
++ 
++ 			// ACK negate wait
++ 			ret = WaitSignal(PIN_ACK, OFF);
++ 
++ 			// ACK negate wait then timeout
++ 			if (!ret) {
++ 				break;
++ 			}
++ 
++ 			// ACK netage wait when wait is already received
++ 
+  			// REQアサート
+  			SetSignal(PIN_REQ, ON);
+  
+  			// ACKアサート待ち
+! 			ret = WaitSignal(PIN_ACK, ON);
+  
+  			// REQネゲート
+  			SetSignal(PIN_REQ, OFF);
+  
+  			// ACKアサート待ちでタイムアウト
+  			if (!ret) {
+  				break;
+  			}
+  
+  			// 次データへ
+  			buf++;
+  		}
++ 
++ 		// ACK negate wait
++ 		WaitSignal(PIN_ACK, OFF);
+  	} else {
+  		// フェーズ取得
+  		phase = Aquire() & GPIO_MCI;
+  
+  		for (i = 0; i < count; i++) {
+! 			// Set Data
+! 			SetDAT(*buf);
+  
+! 			// REQ assert wait
+! 			if (!WaitSignal(PIN_REQ, ON)) {
+  				break;
+  			}
+  
+  			// フェーズエラー
+  			if ((signals & GPIO_MCI) != phase) {
+  				break;
+  			}
+  
+! 			// REQアサート待ちで既にウェイトが入っている
+  
+  			// ACKアサート
+  			SetSignal(PIN_ACK, ON);
+  
+  			// REQネゲート待ち
+! 			ret = WaitSignal(PIN_REQ, OFF);
+  
+  			// ACKネゲート
+  			SetSignal(PIN_ACK, OFF);
+  
+  			// REQネゲート待ちでタイムアウト
+***************
+*** 1075,1165 ****
+  	}
+  
+  	// IRQ有効
+  	EnableIRQ();
+  
+! 	// 受信数を返却
+  	return i;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	データ送信ハンドシェイク
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::SendHandShake(BYTE *buf, int count)
+  {
+  	int i;
+  	BOOL ret;
+  	DWORD phase;
+  
+  	// IRQ無効
+  	DisableIRQ();
+  
+  	if (actmode == TARGET) {
+  		for (i = 0; i < count; i++) {
+- 			// データ設定
+- 			SetDAT(*buf);
+- 
+- 			// ACKネゲート待ち
+- 			ret = WaitSignal(PIN_ACK, FALSE);
+- 
+- 			// ACKネゲート待ちでタイムアウト
+- 			if (!ret) {
+- 				break;
+- 			}
+- 
+- 			// ACKネゲート待ちで既にウェイトが入っている
+- 
+  			// REQアサート
+  			SetSignal(PIN_REQ, ON);
+  
+  			// ACKアサート待ち
+! 			ret = WaitSignal(PIN_ACK, TRUE);
+  
+  			// REQネゲート
+  			SetSignal(PIN_REQ, OFF);
+  
+  			// ACKアサート待ちでタイムアウト
+  			if (!ret) {
+  				break;
+  			}
+  
+  			// 次データへ
+  			buf++;
+  		}
+- 
+- 		// ACKネゲート待ち
+- 		WaitSignal(PIN_ACK, FALSE);
+  	} else {
+  		// フェーズ取得
+  		phase = Aquire() & GPIO_MCI;
+  
+  		for (i = 0; i < count; i++) {
+- 			// データ設定
+- 			SetDAT(*buf);
+- 
+  			// REQアサート待ち
+! 			ret = WaitSignal(PIN_REQ, TRUE);
+! 
+! 			// REQアサート待ちでタイムアウト
+! 			if (!ret) {
+  				break;
+  			}
+  
+  			// フェーズエラー
+  			if ((signals & GPIO_MCI) != phase) {
+  				break;
+  			}
+  
+! 			// REQアサート待ちで既にウェイトが入っている
+  
+  			// ACKアサート
+  			SetSignal(PIN_ACK, ON);
+  
+  			// REQネゲート待ち
+! 			ret = WaitSignal(PIN_REQ, FALSE);
+  
+  			// ACKネゲート
+  			SetSignal(PIN_ACK, OFF);
+  
+  			// REQネゲート待ちでタイムアウト
+--- 1115,1207 ----
+  	}
+  
+  	// IRQ有効
+  	EnableIRQ();
+  
+! 	// Return number of sends
+  	return i;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+! //	Batch data receipt handshake
+  //
+  //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::ReceiveHandShake(BYTE *buf, int count, int syncoffset)
+  {
+  	int i;
+  	BOOL ret;
+  	DWORD phase;
+  
++ #if USE_SYNC_TRANS == 1
++ 	// Sync transfer
++ 	if (actmode == TARGET && syncoffset > 0) {
++ 		return ReceiveSyncTransfer(buf, count, syncoffset);
++ 	}
++ #endif	// USE_SYNC_TRANS == 1
++ 
+  	// IRQ無効
+  	DisableIRQ();
+  
+  	if (actmode == TARGET) {
+  		for (i = 0; i < count; i++) {
+  			// REQアサート
+  			SetSignal(PIN_REQ, ON);
+  
+  			// ACKアサート待ち
+! 			ret = WaitSignal(PIN_ACK, ON);
+! 
+! 			// Wait until signal line is settled down
+! 			DelayBits();
+! 
+! 			// Get data
+! 			Aquire();
+! 			*buf = GetDAT();
+  
+  			// REQネゲート
+  			SetSignal(PIN_REQ, OFF);
+  
+  			// ACKアサート待ちでタイムアウト
+  			if (!ret) {
+  				break;
+  			}
+  
++ 			// ACK negate wait
++ 			if (!WaitSignal(PIN_ACK, OFF)) {
++ 				break;
++ 			}
++ 
+  			// 次データへ
+  			buf++;
+  		}
+  	} else {
+  		// フェーズ取得
+  		phase = Aquire() & GPIO_MCI;
+  
+  		for (i = 0; i < count; i++) {
+  			// REQアサート待ち
+! 			if (!WaitSignal(PIN_REQ, ON)) {
+  				break;
+  			}
+  
+  			// フェーズエラー
+  			if ((signals & GPIO_MCI) != phase) {
+  				break;
+  			}
+  
+! 			// Wait until signal line is settled down
+! 			DelayBits();
+! 
+! 			// Get data
+! 			Aquire();
+! 			*buf = GetDAT();
+  
+  			// ACKアサート
+  			SetSignal(PIN_ACK, ON);
+  
+  			// REQネゲート待ち
+! 			ret = WaitSignal(PIN_REQ, OFF);
+  
+  			// ACKネゲート
+  			SetSignal(PIN_ACK, OFF);
+  
+  			// REQネゲート待ちでタイムアウト
+***************
+*** 1178,1192 ****
+  	}
+  
+  	// IRQ有効
+  	EnableIRQ();
+  
+! 	// 送信数を返却
+  	return i;
+  }
+  
+! #ifdef USE_SEL_EVENT_ENABLE
+  //---------------------------------------------------------------------------
+  //
+  //	SEL信号イベントポーリング
+  //
+  //---------------------------------------------------------------------------
+--- 1220,1576 ----
+  	}
+  
+  	// IRQ有効
+  	EnableIRQ();
+  
+! 	// Return number of receipts
+  	return i;
+  }
+  
+! #if USE_SYNC_TRANS == 1
+! //---------------------------------------------------------------------------
+! //
+! //	Sync data transfers (send)
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::SendSyncTransfer(
+! 	BYTE *buf, int count, int syncoffset)
+! {
+! 	BOOL clkev;
+! 	BOOL ackev;
+! 	int req;
+! 	int ack;
+! 	int offset;
+! 	int watchdog;
+! 
+! 	ASSERT(actmode == TARGET);
+! 	ASSERT(syncoffset > 0);
+! 
+! 	// ACK negate wait
+! 	WaitSignal(PIN_ACK, OFF);
+! 
+! 	// Disable IRQ
+! 	DisableIRQ();
+! 
+! 	// Init counters
+! 	req = 0;
+! 	ack = 0;
+! 	offset = 0;
+! 	watchdog = 4096;
+! 
+! 	// Setup clock event
+! 	SetupClockEvent();
+! 
+! 	// Setup ACK event (Detect take down)
+! 	SetupAckEvent(FALSE);
+! 
+! 	// Loop until all responses have been received
+! 	while (req < count && ack < count) {
+! 		// Get events (Get once to prevent misaligned timing)
+! 		clkev = IsClockEvent();
+! 		ackev = IsAckEvent();
+! 
+! 		// Receive ACK
+! 		if (ackev) {
+! 			// Add to no. of responses
+! 			ack++;
+! 
+! 			// Subtract from offset
+! 			offset--;
+! 
+! 			// Update watchdog counters
+! 			watchdog = 4096;
+! 
+! 			// Clear ACK event
+! 			ClearAckEvent();
+! 		}
+! 
+! 		// Send REQ
+! 		if (clkev || ackev) {
+! 			if (req < count && offset < syncoffset) {
+! 				// Add to no. of requests
+! 				req++;
+! 
+! 				// Add to offset
+! 				offset++;
+! 
+! 				// Set data
+! 				SetDAT(*buf++);
+! 
+! 				// Wait until signal line is settled down
+! 				DelayBits();
+! 
+! 				// Send pulse
+! 				OutputReqPulse();
+! 			}
+! 
+! 			// Check watchdog counter
+! 			if (--watchdog == 0) {
+! 				break;
+! 			}
+! 
+! 			// Clear clock event
+! 			ClearClockEvent();
+! 		}
+! 	}
+! 
+! 	// Release clock event
+! 	ReleaseClockEvent();
+! 
+! 	// Release ACK event
+! 	ReleaseAckEvent(FALSE);
+! 
+! 	// Enable IRQ
+! 	EnableIRQ();
+! 
+! 	// Return no. of requests
+! 	return req;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Sync data transfers (receive)
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL GPIOBUS::ReceiveSyncTransfer(
+! 	BYTE *buf, int count, int syncoffset)
+! {
+! 	int ack;
+! 
+! 	ASSERT(actmode == TARGET);
+! 	ASSERT(syncoffset > 0);
+! 
+! 	// ACK negate wait
+! 	WaitSignal(PIN_ACK, OFF);
+! 
+! 	// Disable IRQ
+! 	DisableIRQ();
+! 
+! 	// Init counter
+! 	ack = 0;
+! 
+! 	// Setup ACK event (Detect take down)
+! 	SetupAckEvent(FALSE);
+! 
+! 	// Loop until all responses have been received
+! 	while (ack < count) {
+! 		// Clear ACK event
+! 		ClearAckEvent();
+! 
+! 		// Send REQ pulse
+! 		OutputReqPulse();
+! 
+! 		// Wait for ACK event
+! 		if (!WaitAckEvent()) {
+! 			break;
+! 		}
+! 
+! 		// Receive ACK
+! 		ack++;
+! 
+! 		// Get data
+! 		Aquire();
+! 		*buf++ = GetDAT();
+! 	}
+! 
+! 	// Release ACK event
+! 	ReleaseAckEvent(FALSE);
+! 
+! 	// Enable IRQ
+! 	EnableIRQ();
+! 
+! 	// Return number of responses
+! 	return ack;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Initialize ACK event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::SetupAckEvent(BOOL rise)
+! {
+! 	// Choose by stand up or take down
+! #if SIGNAL_CONTROL_MODE < 2
+! 	if (rise) {
+! 		gpio[GPIO_AFEN_0 + (PIN_ACK / 32)] |= SIGBIT(PIN_ACK);
+! 	} else {
+! 		gpio[GPIO_AREN_0 + (PIN_ACK / 32)] |= SIGBIT(PIN_ACK);
+! 	}
+! #else
+! 	if (rise) {
+! 		gpio[GPIO_AREN_0 + (PIN_ACK / 32)] |= SIGBIT(PIN_ACK);
+! 	} else {
+! 		gpio[GPIO_AFEN_0 + (PIN_ACK / 32)] |= SIGBIT(PIN_ACK);
+! 	}
+! #endif	// SIGNAL_CONTROL_MODE
+! 
+! 	// Clear
+! 	gpio[GPIO_EDS_0 + (PIN_ACK / 32)] = SIGBIT(PIN_ACK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Release ACK event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::ReleaseAckEvent(BOOL rise)
+! {
+! 	// Choose by stand up or take down
+! #if SIGNAL_CONTROL_MODE < 2
+! 	if (rise) {
+! 		gpio[GPIO_AFEN_0 + (PIN_ACK / 32)] &= ~SIGBIT(PIN_ACK);
+! 	} else {
+! 		gpio[GPIO_AREN_0 + (PIN_ACK / 32)] &= ~SIGBIT(PIN_ACK);
+! 	}
+! #else
+! 	if (rise) {
+! 		gpio[GPIO_AREN_0 + (PIN_ACK / 32)] &= ~SIGBIT(PIN_ACK);
+! 	} else {
+! 		gpio[GPIO_AFEN_0 + (PIN_ACK / 32)] &= ~SIGBIT(PIN_ACK);
+! 	}
+! #endif	// SIGNAL_CONTROL_MODE
+! 
+! 	// Clear
+! 	gpio[GPIO_EDS_0 + (PIN_ACK / 32)] = SIGBIT(PIN_ACK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Inspect ACK event
+! //
+! //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::IsAckEvent()
+! {
+! 	return gpio[GPIO_EDS_0 + (PIN_ACK / 32)] & SIGBIT(PIN_ACK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Clear ACK event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::ClearAckEvent()
+! {
+! 	gpio[GPIO_EDS_0 + (PIN_ACK / 32)] = SIGBIT(PIN_ACK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Wait for ACK event
+! //
+! //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::WaitAckEvent()
+! {
+! 	int watchdog;
+! 
+! 	// Init watchdog counter
+! 	watchdog = GPIO_WATCHDOG_MAX;
+! 
+! 	// Wait for event
+! 	while (!IsAckEvent()) {
+! 		// Subtract from watchdog counter
+! 		watchdog--;
+! 
+! 		// Timeout
+! 		if (watchdog == 0) {
+! 			return FALSE;
+! 		}
+! 	}
+! 
+! 	return TRUE;
+! }
+! #endif	// USE_SYNC_TRANS == 1
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Micro time wait
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::DelayBits()
+! {
+! 	SysTimer::SleepNsec(GPIO_DATA_SETTLING);
+! }
+! 
+! #if USE_SYNC_TRANS == 1
+! //---------------------------------------------------------------------------
+! //
+! //	Init clock event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::SetupClockEvent()
+! {
+! 	gpio[GPIO_AFEN_0 + (PIN_GPCLK / 32)] |= SIGBIT(PIN_GPCLK);
+! 	gpio[GPIO_EDS_0 + (PIN_GPCLK / 32)] = SIGBIT(PIN_GPCLK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Release clock event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::ReleaseClockEvent()
+! {
+! 	gpio[GPIO_AFEN_0 + (PIN_GPCLK / 32)] &= ~SIGBIT(PIN_GPCLK);
+! 	gpio[GPIO_EDS_0 + (PIN_GPCLK / 32)] = SIGBIT(PIN_GPCLK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Inspect clock event
+! //
+! //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::IsClockEvent()
+! {
+! 	return gpio[GPIO_EDS_0 + (PIN_GPCLK / 32)] & SIGBIT(PIN_GPCLK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Clear clock event
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::ClearClockEvent()
+! {
+! 	gpio[GPIO_EDS_0 + (PIN_GPCLK / 32)] = SIGBIT(PIN_GPCLK);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	Output REQ pulse
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL GPIOBUS::OutputReqPulse()
+! {
+! #if SIGNAL_CONTROL_MODE == 0
+! 	int index;
+! 	int shift;
+! 	DWORD sel;
+! 	DWORD ast;
+! 
+! 	index = PIN_REQ / 10;
+! 	shift = (PIN_REQ % 10) * 3;
+! 	sel = gpfsel[index];
+! 	ast = sel | (1 << shift);
+! 	gpio[index] = ast;
+! 	MemoryBarrier();
+! 	gpio[index] = sel;
+! 	MemoryBarrier();
+! #elif SIGNAL_CONTROL_MODE == 1
+! 	gpio[GPIO_CLR_0] = 0x1 << PIN_REQ;
+! 	MemoryBarrier();
+! 	gpio[GPIO_SET_0] = 0x1 << PIN_REQ;
+! 	MemoryBarrier();
+! #elif SIGNAL_CONTROL_MODE == 2
+! 	gpio[GPIO_SET_0] = 0x1 << PIN_REQ;
+! 	MemoryBarrier();
+! 	gpio[GPIO_CLR_0] = 0x1 << PIN_REQ;
+! 	MemoryBarrier();
+! #endif	// SIGNAL_CONTROL_MODE
+! }
+! #endif	// USE_SYNC_TRANS == 1
+! 
+  //---------------------------------------------------------------------------
+  //
+  //	SEL信号イベントポーリング
+  //
+  //---------------------------------------------------------------------------
+***************
+*** 1194,1223 ****
+  {
+  	// errnoクリア
+  	errno = 0;
+  
+  #ifdef BAREMETAL
+  	// 割り込み有効
+  	EnableInterrupts();
+  
+  	// 割り込み待ち
+  	WaitForInterrupts();
+  
+  	// 割り込み無効
+  	DisableInterrupts();
+  #else
+! 	struct epoll_event epev;
+  	struct gpioevent_data gpev;
+  
+! 	if (epoll_wait(epfd, &epev, 1, -1) <= 0) {
+  		return -1;
+  	}
+  
+! 	read(selevreq.fd, &gpev, sizeof(gpev));
+  #endif	// BAREMETAL
+  
+! 	return 0;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	SEL信号イベント解除
+--- 1578,1641 ----
+  {
+  	// errnoクリア
+  	errno = 0;
+  
+  #ifdef BAREMETAL
++ 	int ret;
++ 
++ 	// init
++ 	ret = 0;
++ 
+  	// 割り込み有効
+  	EnableInterrupts();
+  
+  	// 割り込み待ち
+  	WaitForInterrupts();
+  
+  	// 割り込み無効
+  	DisableInterrupts();
++ 
++ 	// Return event
++ 	Aquire();
++ 	if (GetSEL()) {
++ 		ret |= 1;
++ 	}
++ 
++ 	if (GetRST()) {
++ 		ret |= 2;
++ 	}
++ 
++ 	return ret;
+  #else
+! 	struct epoll_event epev[2];
+  	struct gpioevent_data gpev;
++ 	int nfds;
++ 	int i;
++ 	int ret;
++ 
++ 	// init
++ 	ret = 0;
+  
+! 	// Interrupt wait
+! 	nfds = epoll_wait(epfd, epev, 2, -1);
+! 	if (nfds <= 0) {
+  		return -1;
+  	}
+  
+! 	// Return event
+! 	for (i = 0; i < nfds; i++) {
+! 		if (epev[i].data.fd == selevreq.fd) {
+! 			read(selevreq.fd, &gpev, sizeof(gpev));
+! 			ret |= 1;
+! 		} else if (epev[i].data.fd == rstevreq.fd) {
+! 			read(rstevreq.fd, &gpev, sizeof(gpev));
+! 			ret |= 2;
+! 		}
+! 	}
+  #endif	// BAREMETAL
+  
+! 	return ret;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	SEL信号イベント解除
+***************
+*** 1227,1237 ****
+  {
+  #ifdef BAREMETAL
+  	DWORD irq;
+  
+  	// イベントクリア
+! 	gpio[GPIO_EDS_0] = 1 << PIN_SEL;
+  
+  	// GICへの応答
+  	if (rpitype == 4) {
+  		// IRQ番号
+  		irq = gicc[GICC_IAR] & 0x3FF;
+--- 1645,1655 ----
+  {
+  #ifdef BAREMETAL
+  	DWORD irq;
+  
+  	// イベントクリア
+! 	gpio[GPIO_EDS_0] = (1 << PIN_SEL) | (1 << PIN_RST);
+  
+  	// GICへの応答
+  	if (rpitype == 4) {
+  		// IRQ番号
+  		irq = gicc[GICC_IAR] & 0x3FF;
+***************
+*** 1239,1249 ****
+  		// 割り込み応答
+  		gicc[GICC_EOIR] = irq;
+  	}
+  #endif	// BAREMETAL
+  }
+- #endif	// USE_SEL_EVENT_ENABLE
+  
+  //---------------------------------------------------------------------------
+  //
+  //	信号テーブル
+  //
+--- 1657,1666 ----
+***************
+*** 1365,1374 ****
+--- 1782,1794 ----
+  //
+  //---------------------------------------------------------------------------
+  void FASTCALL GPIOBUS::SetControl(int pin, BOOL ast)
+  {
+  	PinSetSignal(pin, ast);
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	入出力モード設定
+***************
+*** 1393,1410 ****
+  	if (mode == OUT) {
+  		data |= (1 << shift);
+  	}
+  	gpio[index] = data;
+  	gpfsel[index] = data;
+  }
+  	
+  //---------------------------------------------------------------------------
+  //
+  //	入力信号値取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetSignal(int pin)
+  {
+  	return  (signals >> pin) & 1;
+  }
+  	
+  //---------------------------------------------------------------------------
+--- 1813,1833 ----
+  	if (mode == OUT) {
+  		data |= (1 << shift);
+  	}
+  	gpio[index] = data;
+  	gpfsel[index] = data;
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  }
+  	
+  //---------------------------------------------------------------------------
+  //
+  //	入力信号値取得
+  //
+  //---------------------------------------------------------------------------
+! BOOL FASTCALL GPIOBUS::GetSignal(int pin) const
+  {
+  	return  (signals >> pin) & 1;
+  }
+  	
+  //---------------------------------------------------------------------------
+***************
+*** 1440,1482 ****
+  		gpio[GPIO_SET_0] = 0x1 << pin;
+  	} else {
+  		gpio[GPIO_CLR_0] = 0x1 << pin;
+  	}
+  #endif	// SIGNAL_CONTROL_MODE
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	信号変化待ち
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL GPIOBUS::WaitSignal(int pin, BOOL ast)
+  {
+  	DWORD now;
+  	DWORD timeout;
+  
+  	// 現在
+  	now = SysTimer::GetTimerLow();
+  
+! 	// Timeout (3000ms)
+! 	timeout = 3000 * 1000;
+  
+  	// 変化したら即終了
+  	do {
+  		// リセットを受信したら即終了
+! 		Aquire();
+! 		if (GetRST()) {
+  			return FALSE;
+  		}
+  
+  		// エッジを検出したら
+! 		if (((signals >> pin) ^ ~ast) & 1) {
+  			return TRUE;
+  		}
+  	} while ((SysTimer::GetTimerLow() - now) < timeout);
+  
+  	// タイムアウト
+  	return FALSE;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+--- 1863,1916 ----
+  		gpio[GPIO_SET_0] = 0x1 << pin;
+  	} else {
+  		gpio[GPIO_CLR_0] = 0x1 << pin;
+  	}
+  #endif	// SIGNAL_CONTROL_MODE
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+  //	信号変化待ち
+  //
+  //---------------------------------------------------------------------------
+  BOOL FASTCALL GPIOBUS::WaitSignal(int pin, BOOL ast)
+  {
++ 	DWORD sig;
+  	DWORD now;
+  	DWORD timeout;
+  
+  	// 現在
+  	now = SysTimer::GetTimerLow();
+  
+! 	// Set timeout
+! 	timeout = GPIO_TIMEOUT_MAX;
+  
+  	// 変化したら即終了
+  	do {
+  		// リセットを受信したら即終了
+! #if SIGNAL_CONTROL_MODE < 2
+! 		sig = ~*level;
+! #else
+! 		sig = *level;
+! #endif	// SIGNAL_CONTROL_MODE
+! 		if (sig & SIGBIT(PIN_RST)) {
+! 			signals = sig;
+  			return FALSE;
+  		}
+  
+  		// エッジを検出したら
+! 		if (((sig >> pin) ^ ~ast) & 1) {
+! 			signals = sig;
+  			return TRUE;
+  		}
+  	} while ((SysTimer::GetTimerLow() - now) < timeout);
+  
+  	// タイムアウト
++ 	signals = sig;
+  	return FALSE;
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+***************
+*** 1498,1507 ****
+--- 1932,1944 ----
+  	} else {
+  		// 割り込みコントローラでシステムタイマー割り込みを止める
+  		irptenb = irpctl[IRPT_ENB_IRQ_1];
+  		irpctl[IRPT_DIS_IRQ_1] = irptenb & 0xf;
+  	}
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  #endif	// BAREMETAL
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+***************
+*** 1519,1528 ****
+--- 1956,1968 ----
+  		qa7regs[tintcore] = tintctl;
+  	} else {
+  		// 割り込みコントローラでシステムタイマー割り込みを再開
+  		irpctl[IRPT_ENB_IRQ_1] = irptenb & 0xf;
+  	}
++ 
++ 	// Memory barrier
++ 	MemoryBarrier();
+  #endif	// BAREMETAL
+  }
+  
+  //---------------------------------------------------------------------------
+  //
+***************
+*** 1537,1547 ****
+  	// 未使用なら無効
+  	if (pin < 0) {
+  		return;
+  	}
+  
+! 	index = pin / 10;
+  	mask = ~(0x7 << ((pin % 10) * 3));
+  	gpio[index] = (gpio[index] & mask) | ((mode & 0x7) << ((pin % 10) * 3));
+  }
+  
+  //---------------------------------------------------------------------------
+--- 1977,1987 ----
+  	// 未使用なら無効
+  	if (pin < 0) {
+  		return;
+  	}
+  
+! 	index = GPIO_FSEL_0 + pin / 10;
+  	mask = ~(0x7 << ((pin % 10) * 3));
+  	gpio[index] = (gpio[index] & mask) | ((mode & 0x7) << ((pin % 10) * 3));
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 1564,1577 ****
+  		switch (mode) {
+  			case GPIO_PULLNONE:
+  				pull = 0;
+  				break;
+  			case GPIO_PULLUP:
+! 				pull = 1;
+  				break;
+  			case GPIO_PULLDOWN:
+! 				pull = 2;
+  				break;
+  			default:
+  				return;
+  		}
+  
+--- 2004,2017 ----
+  		switch (mode) {
+  			case GPIO_PULLNONE:
+  				pull = 0;
+  				break;
+  			case GPIO_PULLUP:
+! 				pull = 2;
+  				break;
+  			case GPIO_PULLDOWN:
+! 				pull = 1;
+  				break;
+  			default:
+  				return;
+  		}
+  
+***************
+*** 1675,1685 ****
+  	// ARMタイマをフリーランモードに変更
+  	armtaddr[ARMT_CTRL] = 0x00000282;
+  
+  	// コア周波数取得
+  #ifdef BAREMETAL
+! 	corefreq = RPi_Core_Freq / 1000000;
+  #else
+  	corefreq = 0;
+  	fd = open("/dev/vcio", O_RDONLY);
+  	if (fd >= 0) {
+  		ioctl(fd, _IOWR(100, 0, char *), maxclock);
+--- 2115,2125 ----
+  	// ARMタイマをフリーランモードに変更
+  	armtaddr[ARMT_CTRL] = 0x00000282;
+  
+  	// コア周波数取得
+  #ifdef BAREMETAL
+! 	corefreq = ARM_getcorespeed() / 1000000;
+  #else
+  	corefreq = 0;
+  	fd = open("/dev/vcio", O_RDONLY);
+  	if (fd >= 0) {
+  		ioctl(fd, _IOWR(100, 0, char *), maxclock);
+***************
+*** 1689,1698 ****
+--- 2129,2156 ----
+  #endif	// BAREMETAL
+  }
+  
+  //---------------------------------------------------------------------------
+  //
++ //	Get system time
++ //
++ //---------------------------------------------------------------------------
++ UL64 FASTCALL SysTimer::GetTimer()
++ {
++ 	DWORD hi;
++ 	DWORD lo;
++ 
++ 	do {
++ 		hi = systaddr[SYST_CHI];
++ 		lo = systaddr[SYST_CLO];
++ 	} while (hi != systaddr[SYST_CHI]);
++ 
++ 	return (((UL64)hi << 32) | lo);
++ }
++ 
++ //---------------------------------------------------------------------------
++ //
+  //	システムタイマ(LO)取得
+  //
+  //---------------------------------------------------------------------------
+  DWORD FASTCALL SysTimer::GetTimerLow() {
+  	return systaddr[SYST_CLO];
+***************
+*** 1752,1756 ****
+--- 2210,2236 ----
+  	}
+  
+  	now = GetTimerLow();
+  	while ((GetTimerLow() - now) < usec);
+  }
++ 
++ extern "C"
++ //---------------------------------------------------------------------------
++ //
++ //	Get timer (public use)
++ //
++ //---------------------------------------------------------------------------
++ DWORD GetTimeUs()
++ {
++ 	return SysTimer::GetTimerLow();
++ }
++ 
++ extern "C"
++ //---------------------------------------------------------------------------
++ //
++ //	Timer wait (public use)
++ //
++ //---------------------------------------------------------------------------
++ void SleepUs(int us)
++ {
++ 	SysTimer::SleepUsec(us);
++ }
+\ No newline at end of file

@@ -1,0 +1,193 @@
+*** src/raspberrypi/rasdump.cpp	Sat Apr 11 22:53:00 2020
+--- src/raspberrypi/rasdump.cpp	Fri Mar 26 21:18:20 2021
+***************
+*** 1,28 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+! //	Copyright (C) 2016-2020 GIMONS
+  //	[ HDDダンプユーティリティ(イニシーエタモード) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "xm6.h"
+  #include "fileio.h"
+  #include "filepath.h"
+  #include "gpiobus.h"
+  
+  //---------------------------------------------------------------------------
+  //
+  //	定数宣言
+  //
+  //---------------------------------------------------------------------------
+! #define BUFSIZE 1024 * 64			// 64KBぐらいかなぁ
+  
+  //---------------------------------------------------------------------------
+  //
+  //	変数宣言
+  //
+--- 1,30 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+! //
+  //	[ HDDダンプユーティリティ(イニシーエタモード) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "rascsi.h"
+  #include "fileio.h"
+  #include "filepath.h"
++ #include "disk.h"
+  #include "gpiobus.h"
+  
+  //---------------------------------------------------------------------------
+  //
+  //	定数宣言
+  //
+  //---------------------------------------------------------------------------
+! #define BUFSIZE 1024 * 64			// 32KB
+  
+  //---------------------------------------------------------------------------
+  //
+  //	変数宣言
+  //
+***************
+*** 96,109 ****
+  	if (signal(SIGTERM, KillHandler) == SIG_ERR) {
+  		return FALSE;
+  	}
+  
+  	// GPIO初期化
+! 	if (!bus.Init(BUS::INITIATOR)) {
+  		return FALSE;
+  	}
+  
+  	// ワーク初期化
+  	targetid = -1;
+  	boardid = 7;
+  	restore = FALSE;
+  
+--- 98,114 ----
+  	if (signal(SIGTERM, KillHandler) == SIG_ERR) {
+  		return FALSE;
+  	}
+  
+  	// GPIO初期化
+! 	if (!bus.Init()) {
+  		return FALSE;
+  	}
+  
++ 	// イニシエータモードに設定
++ 	bus.SetMode(GPIOBUS::INITIATOR);
++ 
+  	// ワーク初期化
+  	targetid = -1;
+  	boardid = 7;
+  	restore = FALSE;
+  
+***************
+*** 240,249 ****
+--- 245,257 ----
+  BOOL Selection(int id)
+  {
+  	BYTE data;
+  	int count;
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// ID設定とSELアサート
+  	data = 0;
+  	data |= (1 << boardid);
+  	data |= (1 << id);
+  	bus.SetDAT(data);
+***************
+*** 278,287 ****
+--- 286,298 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::command)) {
+  		return FALSE;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// コマンド送信
+  	count = bus.SendHandShake(buf, length);
+  
+  	// 送信結果が依頼数と同じなら成功
+  	if (count == length) {
+***************
+*** 302,311 ****
+--- 313,325 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::datain)) {
+  		return -1;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
++ 
+  	// データ受信
+  	return bus.ReceiveHandShake(buf, length);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 318,327 ****
+--- 332,344 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::dataout)) {
+  		return -1;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
++ 
+  	// データ受信
+  	return bus.SendHandShake(buf, length);
+  }
+  
+  //---------------------------------------------------------------------------
+***************
+*** 336,345 ****
+--- 353,365 ----
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::status)) {
+  		return -2;
+  	}
+  
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
++ 
+  	// データ受信
+  	if (bus.ReceiveHandShake(buf, 1) == 1) {
+  		return (int)buf[0];
+  	}
+  
+***************
+*** 358,367 ****
+--- 378,390 ----
+  
+  	// フェーズ待ち
+  	if (!WaitPhase(BUS::msgin)) {
+  		return -2;
+  	}
++ 
++ 	// データバス方向設定
++ 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
+  
+  	// データ受信
+  	if (bus.ReceiveHandShake(buf, 1) == 1) {
+  		return (int)buf[0];
+  	}

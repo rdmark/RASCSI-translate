@@ -57,7 +57,7 @@
 ! #define USE_LOG_OUTPUT	1				// 1:printf output
 ! #define USE_WAIT_CTRL	1				// 1: Enable timing adjustment
 ! #define USE_BURST_BUS	1				// 1: Enable data burst transfer
-! #define USE_SYNC_TRANS	0				// 1: Enable synchronized redirect
+! #define USE_SYNC_TRANS	0				// 1: Enable synchronized transfer
 ! #define USE_MZ1F23_1024_SUPPORT		1	// 1: MZ-1F23 (20M/sector size 1024)
 ! #define REMOVE_FIXED_SASIHD_SIZE	1	// 1: Remove SASIHD size restrictions
 ! #define BRIDGE_PRODUCT	"RASCSI BRIDGE"	// Bridge device product name

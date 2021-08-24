@@ -4647,7 +4647,7 @@
 - SCSIDEV::SCSIDEV(Device *dev) : SASIDEV(dev)
 - #endif
   {
-! 	// Synchronized redirect work init
+! 	// Synchronous transfer work init
   	scsi.syncenable = FALSE;
 ! 	scsi.syncperiod = 50;
   	scsi.syncoffset = 0;
@@ -5170,7 +5170,7 @@
 ! 		case BUS::msgout:
 ! 			// Only if ATN keep getting asserted do we continue to the message phase
 ! 			if (ctrl.bus->GetATN()) {
-! 				// Data redirect is 1 byte by 1 block
+! 				// Data transfer is 1 byte by 1 block
 ! 				ctrl.offset = 0;
 ! 				ctrl.length = 1;
 ! 				ctrl.blocks = 1;
@@ -5226,7 +5226,7 @@
 ! 							"Message Code EXTENDED MESSAGE $%02X", data);
 ! #endif	// DISK_LOG
 ! 
-! 						// Only check when synchronized redirection is possible
+! 						// Only check when synchronized transfer is possible
 ! 						if (!scsi.syncenable || scsi.msb[i + 2] != 0x01) {
 ! 							// MESSAGE REJECT
 ! 							ctrl.length = 1;
@@ -5254,7 +5254,7 @@
 ! 						ctrl.buffer[0] = 0x01;					// Expanded message
 ! 						ctrl.buffer[1] = 0x03;					// Expanded message long
 ! 						ctrl.buffer[2] = 0x01;					// SDTR code
-! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Redirect period coefficient
+! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Transfer period coefficient
 ! 						ctrl.buffer[4] = (BYTE)scsi.syncoffset;	// REQ/ACK offset
 ! 						MsgIn();
 ! 						return;
@@ -5265,7 +5265,7 @@
 ! 				}
 ! 			}
 ! 
-! 			// ATN message receipt status initialize
+! 			// ATN message receive status initialize
 ! 			scsi.atnmsg = FALSE;
 ! 
 ! 			// Command phase
@@ -5623,7 +5623,7 @@
 ! 						ctrl.buffer[0] = 0x01;					// Expanded message
 ! 						ctrl.buffer[1] = 0x03;					// Expanded message long
 ! 						ctrl.buffer[2] = 0x01;					// SDTR code
-! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Redirect period coefficient
+! 						ctrl.buffer[3] = (BYTE)scsi.syncperiod;	// Transfer period coefficient
 ! 						ctrl.buffer[4] = (BYTE)scsi.syncoffset;	// REQ/ACK offset
   						MsgIn();
   						return;

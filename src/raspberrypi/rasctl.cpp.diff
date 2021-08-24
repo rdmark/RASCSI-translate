@@ -1,0 +1,219 @@
+*** src/raspberrypi/rasctl.cpp	Sat Apr 11 22:52:54 2020
+--- src/raspberrypi/rasctl.cpp	Fri Mar 26 21:18:14 2021
+***************
+*** 1,12 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+! //	Copyright (C) 2016-2020 GIMONS
+  //	[ 制御コマンド送信 ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+--- 1,13 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+! //
+  //	[ 制御コマンド送信 ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+***************
+*** 67,87 ****
+  	int id;
+  	int un;
+  	int cmd;
+  	int type;
+  	char *file;
+- 	BOOL list;
+  	int len;
+  	char *ext;
+  	char buf[BUFSIZ];
+  
+  	id = -1;
+  	un = 0;
+  	cmd = -1;
+  	type = -1;
+  	file = NULL;
+- 	list = FALSE;
+  
+  	// ヘルプの表示
+  	if (argc < 2) {
+  		fprintf(stderr, "SCSI Target Emulator RaSCSI Controller\n");
+  		fprintf(stderr,
+--- 68,86 ----
+***************
+*** 91,108 ****
+  		fprintf(stderr, "        UNIT := {0|1} default setting is 0.\n");
+  		fprintf(stderr, "        CMD := {attach|detach|insert|eject|protect}\n");
+  		fprintf(stderr, "        TYPE := {hd|mo|cd|bridge}\n");
+  		fprintf(stderr, "        FILE := image file path\n");
+  		fprintf(stderr, " CMD is 'attach' or 'insert' and FILE parameter is required.\n");
+! 		fprintf(stderr, "Usage: %s -l\n", argv[0]);
+  		fprintf(stderr, "       Print device list.\n");
+  		exit(0);
+  	}
+  
+  	// 引数解析
+  	opterr = 0;
+! 	while ((opt = getopt(argc, argv, "i:u:c:t:f:l")) != -1) {
+  		switch (opt) {
+  			case 'i':
+  				id = optarg[0] - '0';
+  				break;
+  
+--- 90,114 ----
+  		fprintf(stderr, "        UNIT := {0|1} default setting is 0.\n");
+  		fprintf(stderr, "        CMD := {attach|detach|insert|eject|protect}\n");
+  		fprintf(stderr, "        TYPE := {hd|mo|cd|bridge}\n");
+  		fprintf(stderr, "        FILE := image file path\n");
+  		fprintf(stderr, " CMD is 'attach' or 'insert' and FILE parameter is required.\n");
+! 		fprintf(stderr, "\n");
+! 		fprintf(stderr, "Usage: %s -l\n\n", argv[0]);
+  		fprintf(stderr, "       Print device list.\n");
++ 		fprintf(stderr, "\n");
++ 		fprintf(stderr, "Usage: %s --stop\n\n", argv[0]);
++ 		fprintf(stderr, "       Stop rascsi prosess.\n");
++ 		fprintf(stderr, "\n");
++ 		fprintf(stderr, "Usage: %s --shutdown\n\n", argv[0]);
++ 		fprintf(stderr, "       Shutdown raspberry pi.\n");
+  		exit(0);
+  	}
+  
+  	// 引数解析
+  	opterr = 0;
+! 	while ((opt = getopt(argc, argv, "i:u:c:t:f:l-:")) != -1) {
+  		switch (opt) {
+  			case 'i':
+  				id = optarg[0] - '0';
+  				break;
+  
+***************
+*** 161,182 ****
+  			case 'f':
+  				file = optarg;
+  				break;
+  
+  			case 'l':
+! 				list = TRUE;
+  				break;
+  		}
+  	}
+  
+- 	// リスト表示のみ
+- 	if (id < 0 && cmd < 0 && type < 0 && file == NULL && list) {
+- 		sprintf(buf, "list\n");
+- 		SendCommand(buf);
+- 		exit(0);
+- 	}
+- 
+  	// IDチェック
+  	if (id < 0 || id > 7) {
+  		fprintf(stderr, "Error : Invalid ID\n");
+  		exit(EINVAL);
+  	}
+--- 167,194 ----
+  			case 'f':
+  				file = optarg;
+  				break;
+  
+  			case 'l':
+! 				sprintf(buf, "list\n");
+! 				SendCommand(buf);
+! 				exit(0);
+! 
+! 			case '-':
+! 				if (strcmp(optarg, "shutdown") == 0) {
+! 					sprintf(buf, "shutdown\n");
+! 					SendCommand(buf);
+! 					exit(0);
+! 				} else if (strcmp(optarg, "stop") == 0) {
+! 					sprintf(buf, "stop\n");
+! 					SendCommand(buf);
+! 					exit(0);
+! 				}
+  				break;
+  		}
+  	}
+  
+  	// IDチェック
+  	if (id < 0 || id > 7) {
+  		fprintf(stderr, "Error : Invalid ID\n");
+  		exit(EINVAL);
+  	}
+***************
+*** 197,218 ****
+  
+  		// 拡張子からタイプ判別を試みる
+  		len = file ? strlen(file) : 0;
+  		if (len > 4 && file[len - 4] == '.') {
+  			ext = &file[len - 3];
+! 			if (xstrcasecmp(ext, "hdf") == 0 ||
+! 				xstrcasecmp(ext, "hds") == 0 ||
+! 				xstrcasecmp(ext, "hdn") == 0 ||
+! 				xstrcasecmp(ext, "hdi") == 0 ||
+! 				xstrcasecmp(ext, "nhd") == 0 ||
+! 				xstrcasecmp(ext, "hda") == 0) {
+  				// HD(SASI/SCSI)
+  				type = 0;
+! 			} else if (xstrcasecmp(ext, "mos") == 0) {
+  				// MO
+  				type = 2;
+! 			} else if (xstrcasecmp(ext, "iso") == 0) {
+  				// CD
+  				type = 3;
+  			}
+  		}
+  
+--- 209,230 ----
+  
+  		// 拡張子からタイプ判別を試みる
+  		len = file ? strlen(file) : 0;
+  		if (len > 4 && file[len - 4] == '.') {
+  			ext = &file[len - 3];
+! 			if (_xstrcasecmp(ext, "hdf") == 0 ||
+! 				_xstrcasecmp(ext, "hds") == 0 ||
+! 				_xstrcasecmp(ext, "hdn") == 0 ||
+! 				_xstrcasecmp(ext, "hdi") == 0 ||
+! 				_xstrcasecmp(ext, "nhd") == 0 ||
+! 				_xstrcasecmp(ext, "hda") == 0) {
+  				// HD(SASI/SCSI)
+  				type = 0;
+! 			} else if (_xstrcasecmp(ext, "mos") == 0) {
+  				// MO
+  				type = 2;
+! 			} else if (_xstrcasecmp(ext, "iso") == 0) {
+  				// CD
+  				type = 3;
+  			}
+  		}
+  
+***************
+*** 245,260 ****
+  
+  	// 送信コマンド生成
+  	sprintf(buf, "%d %d %d %d %s\n", id, un, cmd, type, file ? file : "-");
+  	if (!SendCommand(buf)) {
+  		exit(ENOTCONN);
+- 	}
+- 
+- 	// リスト表示
+- 	if (list) {
+- 		sprintf(buf, "list\n");
+- 		SendCommand(buf);
+  	}
+  
+  	// 終了
+  	exit(0);
+  }
+--- 257,266 ----
