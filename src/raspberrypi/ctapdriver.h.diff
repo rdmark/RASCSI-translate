@@ -1,0 +1,120 @@
+*** C:/Users/dmark/Downloads/rascsi147/src/raspberrypi/ctapdriver.h	Sat Apr 11 22:53:28 2020
+--- C:/Users/dmark/Downloads/rascsi152/src/raspberrypi/netdriver.h	Fri Mar 26 21:18:40 2021
+***************
+*** 1,31 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+- //	Copyright (C) 2016-2020 GIMONS
+  //
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+! //	[ TAPドライバ ]
+  //
+  //---------------------------------------------------------------------------
+  
+! #if !defined(ctapdriver_h)
+! #define ctapdriver_h
+  
+! #ifndef ETH_FRAME_LEN
+! #define ETH_FRAME_LEN 1514
+! #endif
+  
+  //===========================================================================
+  //
+  //	Tapドライバ
+  //
+  //===========================================================================
+  class CTapDriver
+  {
+  public:
+  	// 基本ファンクション
+  	CTapDriver();
+--- 1,69 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+  //
++ //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //
+! //	[ ネットワークドライバ ]
+  //
+  //---------------------------------------------------------------------------
+  
+! #if !defined(cnetdriver_h)
+! #define cnetdriver_h
+  
+! class CTapDriver;
+! class NetDriver
+! {
+! public:
+! 	// 基本ファンクション
+! 	NetDriver();
+! 										// コンストラクタ
+! 	virtual ~NetDriver();
+! 										// デストラクタ
+! 
+! 	int FASTCALL IsNetEnable() { return m_bTapEnable; }
+! 										// ネットワーク機能有効取得
+! 	int FASTCALL Process(BOOL read, int func, int phase, int len, BYTE *buf);
+! 										// 実行
+! 	int FASTCALL GetMacAddr(BYTE *buf);
+! 										// MACアドレス取得
+! 	void FASTCALL SetMacAddr(BYTE *buf);
+! 										// MACアドレス設定
+! 	void FASTCALL ReceivePacket();
+! 										// パケット受信
+! 	void FASTCALL GetPacketBuf(BYTE *buf);
+! 										// パケット取得
+! 	void FASTCALL SendPacket(BYTE *buf, int len);
+! 										// パケット送信
+! 
+! 	CTapDriver *tap;
+! 										// TAPドライバ
+! 	BOOL m_bTapEnable;
+! 										// TAP有効フラグ
+! 	BYTE mac_addr[6];
+! 										// MACアドレス
+! 	int packet_len;
+! 										// 受信パケットサイズ
+! 	BYTE packet_buf[0x1000];
+! 										// 受信パケットバッファ
+! 	BOOL packet_enable;
+! 										// 受信パケット有効
+! };
+  
+  //===========================================================================
+  //
+  //	Tapドライバ
+  //
+  //===========================================================================
++ #ifndef ETH_FRAME_LEN
++ #define ETH_FRAME_LEN 1514
++ #endif
++ 
+  class CTapDriver
+  {
+  public:
+  	// 基本ファンクション
+  	CTapDriver();
+***************
+*** 48,53 ****
+  										// 送信有効フラグ
+  	int m_hTAP;
+  										// ディスクプリタ
+  };
+  
+! #endif	// ctapdriver_h
+--- 86,91 ----
+  										// 送信有効フラグ
+  	int m_hTAP;
+  										// ディスクプリタ
+  };
+  
+! #endif	// cnetdriver_h

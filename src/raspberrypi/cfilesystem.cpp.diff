@@ -1,0 +1,1239 @@
+*** C:/Users/dmark/Downloads/rascsi147/src/raspberrypi/cfilesystem.cpp	Sat Apr 11 22:51:34 2020
+--- C:/Users/dmark/Downloads/rascsi152/src/raspberrypi/fsdriver.cpp	Fri Mar 26 21:17:24 2021
+***************
+*** 1,25 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+! //	Copyright (C) 2016-2020 GIMONS
+  //
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //	Imported sava's bugfix patch(in RASDRV DOS edition).
+  //
+! //	[ ホストファイルシステム ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "xm6.h"
+! #include "log.h"
+  #include "filepath.h"
+! #include "cfilesystem.h"
+  
+  #ifdef BAREMETAL
+  //---------------------------------------------------------------------------
+  //
+  // FatFs用タイムスタンプ
+--- 1,1166 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+  //
+  //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
+  //	Imported sava's bugfix patch(in RASDRV DOS edition).
+  //
+! //	[ ファイルシステムドライバ ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #include "os.h"
+! #include "rascsi.h"
+  #include "filepath.h"
+! #include "fsdriver.h"
+! 
+! //===========================================================================
+! //
+! //	ファイルシステムドライバ
+! //
+! //===========================================================================
+! static FsDriver *self;
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	コールバック関数
+! //
+! //---------------------------------------------------------------------------
+! int FsCallback(BOOL read, int func, int phase, int len, BYTE *buf)
+! {
+! 	ASSERT(self);
+! 
+! 	return self->Process(read, func, phase, len, buf);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	コンストラクタ
+! //
+! //---------------------------------------------------------------------------
+! FsDriver::FsDriver()
+! {
+! 	// ホストファイルシステム生成
+! 	fs = new CFileSys();
+! 	fs->Reset();
+! 
+! 	// 自身を保存
+! 	self = this;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	デストラクタ
+! //
+! //---------------------------------------------------------------------------
+! FsDriver::~FsDriver()
+! {
+! 	// ホストファイルシステム解放
+! 	if (fs) {
+! 		fs->Reset();
+! 		delete fs;
+! 	}
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	実行
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL FsDriver::Process(
+! 	BOOL read, int func, int phase, int len, BYTE *buf)
+! {
+! 	ASSERT(this);
+! 
+! 	if (read) {
+! 		switch (phase) {
+! 			case 0:		// 結果コード取得
+! 				return ReadFsResult(buf);
+! 
+! 			case 1:		// 返却データ取得
+! 				return ReadFsOut(buf);
+! 
+! 			case 2:		// 返却追加データ取得
+! 				return ReadFsOpt(buf);
+! 		}
+! 	} else {
+! 		switch (phase) {
+! 			case 0:		// コマンド発行
+! 				WriteFs(func, buf);
+! 				return len;
+! 
+! 			case 1:		// 追加データ書き込み
+! 				WriteFsOpt(buf, len);
+! 				return len;
+! 		}
+! 	}
+! 
+! 	// エラー
+! 	ASSERT(FALSE);
+! 	return 0;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $40 - デバイス起動
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::InitDevice(BYTE *buf)
+! {
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	fs->Reset();
+! 	result = fs->InitDevice((Human68k::argument_t*)buf);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $41 - ディレクトリチェック
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::CheckDir(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 	
+! 	result = fs->CheckDir(nUnit, pNamests);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $42 - ディレクトリ作成
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::MakeDir(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 	
+! 	result = fs->MakeDir(nUnit, pNamests);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $43 - ディレクトリ削除
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::RemoveDir(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 	
+! 	result = fs->RemoveDir(nUnit, pNamests);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $44 - ファイル名変更
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Rename(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	Human68k::namests_t* pNamestsNew;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 
+! 	pNamestsNew = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 	
+! 	result = fs->Rename(nUnit, pNamests, pNamestsNew);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $45 - ファイル削除
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Delete(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 	
+! 	result = fs->Delete(nUnit, pNamests);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $46 - ファイル属性取得/設定
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Attribute(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::namests_t *pNamests;
+! 	DWORD nHumanAttribute;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nHumanAttribute = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->Attribute(nUnit, pNamests, nHumanAttribute);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $47 - ファイル検索
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Files(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::namests_t *pNamests;
+! 	Human68k::files_t *files;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 
+! 	files = (Human68k::files_t*)&buf[i];
+! 	i += sizeof(Human68k::files_t);
+! 
+! 	files->sector = ntohl(files->sector);
+! 	files->offset = ntohs(files->offset);
+! 	files->time = ntohs(files->time);
+! 	files->date = ntohs(files->date);
+! 	files->size = ntohl(files->size);
+! 
+! 	result = fs->Files(nUnit, nKey, pNamests, files);
+! 
+! 	files->sector = htonl(files->sector);
+! 	files->offset = htons(files->offset);
+! 	files->time = htons(files->time);
+! 	files->date = htons(files->date);
+! 	files->size = htonl(files->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], files, sizeof(Human68k::files_t));
+! 	i += sizeof(Human68k::files_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $48 - ファイル次検索
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::NFiles(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::files_t *files;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	files = (Human68k::files_t*)&buf[i];
+! 	i += sizeof(Human68k::files_t);
+! 
+! 	files->sector = ntohl(files->sector);
+! 	files->offset = ntohs(files->offset);
+! 	files->time = ntohs(files->time);
+! 	files->date = ntohs(files->date);
+! 	files->size = ntohl(files->size);
+! 
+! 	result = fs->NFiles(nUnit, nKey, files);
+! 
+! 	files->sector = htonl(files->sector);
+! 	files->offset = htons(files->offset);
+! 	files->time = htons(files->time);
+! 	files->date = htons(files->date);
+! 	files->size = htonl(files->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], files, sizeof(Human68k::files_t));
+! 	i += sizeof(Human68k::files_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $49 - ファイル作成
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Create(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::namests_t *pNamests;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD nAttribute;
+! 	BOOL bForce;
+! 	DWORD *dp;
+! 	BOOL *bp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nAttribute = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	bp = (BOOL*)&buf[i];
+! 	bForce = ntohl(*bp);
+! 	i += sizeof(BOOL);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Create(nUnit, nKey, pNamests, pFcb, nAttribute, bForce);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4A - ファイルオープン
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Open(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::namests_t *pNamests;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pNamests = (Human68k::namests_t*)&buf[i];
+! 	i += sizeof(Human68k::namests_t);
+! 
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Open(nUnit, nKey, pNamests, pFcb);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4B - ファイルクローズ
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Close(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Close(nUnit, nKey, pFcb);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4C - ファイル読み込み
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Read(BYTE *buf)
+! {
+! 	DWORD nKey;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD nSize;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 	
+! 	dp = (DWORD*)&buf[i];
+! 	nSize = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Read(nKey, pFcb, optbuf, nSize);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! 
+! 	optlen = result;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4D - ファイル書き込み
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Write(BYTE *buf)
+! {
+! 	DWORD nKey;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD nSize;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nSize = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Write(nKey, pFcb, optbuf, nSize);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4E - ファイルシーク
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Seek(BYTE *buf)
+! {
+! 	DWORD nKey;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD nMode;
+! 	int nOffset;
+! 	DWORD *dp;
+! 	int *ip;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nMode = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	ip = (int*)&buf[i];
+! 	nOffset = ntohl(*ip);
+! 	i += sizeof(int);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->Seek(nKey, pFcb, nMode, nOffset);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $4F - ファイル時刻取得/設定
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::TimeStamp(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nKey;
+! 	Human68k::fcb_t *pFcb;
+! 	DWORD nHumanTime;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nKey = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pFcb = (Human68k::fcb_t*)&buf[i];
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nHumanTime = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pFcb->fileptr = ntohl(pFcb->fileptr);
+! 	pFcb->mode = ntohs(pFcb->mode);
+! 	pFcb->time = ntohs(pFcb->time);
+! 	pFcb->date = ntohs(pFcb->date);
+! 	pFcb->size = ntohl(pFcb->size);
+! 
+! 	result = fs->TimeStamp(nUnit, nKey, pFcb, nHumanTime);
+! 
+! 	pFcb->fileptr = htonl(pFcb->fileptr);
+! 	pFcb->mode = htons(pFcb->mode);
+! 	pFcb->time = htons(pFcb->time);
+! 	pFcb->date = htons(pFcb->date);
+! 	pFcb->size = htonl(pFcb->size);
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pFcb, sizeof(Human68k::fcb_t));
+! 	i += sizeof(Human68k::fcb_t);
+! 
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $50 - 容量取得
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::GetCapacity(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::capacity_t cap;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	result = fs->GetCapacity(nUnit, &cap);
+! 
+! 	cap.freearea = htons(cap.freearea);
+! 	cap.clusters = htons(cap.clusters);
+! 	cap.sectors = htons(cap.sectors);
+! 	cap.bytes = htons(cap.bytes);
+! 
+! 	memcpy(outbuf, &cap, sizeof(Human68k::capacity_t));
+! 	outlen = sizeof(Human68k::capacity_t);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $51 - ドライブ状態検査/制御
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::CtrlDrive(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::ctrldrive_t *pCtrlDrive;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	pCtrlDrive = (Human68k::ctrldrive_t*)&buf[i];
+! 	i += sizeof(Human68k::ctrldrive_t);
+! 	
+! 	result = fs->CtrlDrive(nUnit, pCtrlDrive);
+! 
+! 	memcpy(outbuf, pCtrlDrive, sizeof(Human68k::ctrldrive_t));
+! 	outlen = sizeof(Human68k::ctrldrive_t);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $52 - DPB取得
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::GetDPB(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	Human68k::dpb_t dpb;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->GetDPB(nUnit, &dpb);
+! 
+! 	dpb.sector_size = htons(dpb.sector_size);
+! 	dpb.fat_sector = htons(dpb.fat_sector);
+! 	dpb.file_max = htons(dpb.file_max);
+! 	dpb.data_sector = htons(dpb.data_sector);
+! 	dpb.cluster_max = htons(dpb.cluster_max);
+! 	dpb.root_sector = htons(dpb.root_sector);
+! 
+! 	memcpy(outbuf, &dpb, sizeof(Human68k::dpb_t));
+! 	outlen = sizeof(Human68k::dpb_t);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $53 - セクタ読み込み
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::DiskRead(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nSector;
+! 	DWORD nSize;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nSector = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nSize = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->DiskRead(nUnit, outbuf, nSector, nSize);
+! 	outlen = 0x200;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $54 - セクタ書き込み
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::DiskWrite(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->DiskWrite(nUnit);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $55 - IOCTRL
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Ioctrl(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD nFunction;
+! 	Human68k::ioctrl_t *pIoctrl;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	dp = (DWORD*)&buf[i];
+! 	nFunction = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 
+! 	pIoctrl = (Human68k::ioctrl_t*)&buf[i];
+! 	i += sizeof(Human68k::ioctrl_t);
+! 
+! 	switch (nFunction) {
+! 		case 2:
+! 		case -2:
+! 			pIoctrl->param = htonl(pIoctrl->param);
+! 			break;
+! 	}
+! 
+! 	result = fs->Ioctrl(nUnit, nFunction, pIoctrl);
+! 
+! 	switch (nFunction) {
+! 		case 0:
+! 			pIoctrl->media = htons(pIoctrl->media);
+! 			break;
+! 		case 1:
+! 		case -3:
+! 			pIoctrl->param = htonl(pIoctrl->param);
+! 			break;
+! 	}
+! 
+! 	i = 0;
+! 	memcpy(&outbuf[i], pIoctrl, sizeof(Human68k::ioctrl_t));
+! 	i += sizeof(Human68k::ioctrl_t);
+! 	outlen = i;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $56 - フラッシュ
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Flush(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->Flush(nUnit);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $57 - メディア交換チェック
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::CheckMedia(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->CheckMedia(nUnit);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //  $58 - 排他制御
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::Lock(BYTE *buf)
+! {
+! 	DWORD nUnit;
+! 	DWORD *dp;
+! 	int i;
+! 
+! 	ASSERT(this);
+! 	ASSERT(fs);
+! 	ASSERT(buf);
+! 
+! 	i = 0;
+! 	dp = (DWORD*)buf;
+! 	nUnit = ntohl(*dp);
+! 	i += sizeof(DWORD);
+! 	
+! 	result = fs->Lock(nUnit);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	ファイルシステム読み込み(結果コード)
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL FsDriver::ReadFsResult(BYTE *buf)
+! {
+! 	DWORD *dp;
+! 
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	dp = (DWORD*)buf;
+! 	*dp = htonl(result);
+! 	return sizeof(DWORD);
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	ファイルシステム読み込み(返却データ)
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL FsDriver::ReadFsOut(BYTE *buf)
+! {
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	memcpy(buf, outbuf, outlen);
+! 	return outlen;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	ファイルシステム読み込み(返却オプションデータ)
+! //
+! //---------------------------------------------------------------------------
+! int FASTCALL FsDriver::ReadFsOpt(BYTE *buf)
+! {
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	memcpy(buf, optbuf, optlen);
+! 	return optlen;
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	ファイルシステム書き込み
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::WriteFs(int func, BYTE *buf)
+! {
+! 	ASSERT(this);
+! 	ASSERT(buf);
+! 
+! 	result = FS_FATAL_INVALIDCOMMAND;
+! 	outlen = 0;
+! 	optlen = 0;
+! 
+! 	// コマンド分岐
+! 	func &= 0x1f;
+! 	switch (func) {
+! 		case 0x00: return InitDevice(buf);	// $40 - デバイス起動
+! 		case 0x01: return CheckDir(buf);		// $41 - ディレクトリチェック
+! 		case 0x02: return MakeDir(buf);		// $42 - ディレクトリ作成
+! 		case 0x03: return RemoveDir(buf);	// $43 - ディレクトリ削除
+! 		case 0x04: return Rename(buf);		// $44 - ファイル名変更
+! 		case 0x05: return Delete(buf);		// $45 - ファイル削除
+! 		case 0x06: return Attribute(buf);	// $46 - ファイル属性取得/設定
+! 		case 0x07: return Files(buf);		// $47 - ファイル検索
+! 		case 0x08: return NFiles(buf);		// $48 - ファイル次検索
+! 		case 0x09: return Create(buf);		// $49 - ファイル作成
+! 		case 0x0A: return Open(buf);			// $4A - ファイルオープン
+! 		case 0x0B: return Close(buf);		// $4B - ファイルクローズ
+! 		case 0x0C: return Read(buf);			// $4C - ファイル読み込み
+! 		case 0x0D: return Write(buf);		// $4D - ファイル書き込み
+! 		case 0x0E: return Seek(buf);			// $4E - ファイルシーク
+! 		case 0x0F: return TimeStamp(buf);	// $4F - ファイル更新時刻の取得/設定
+! 		case 0x10: return GetCapacity(buf);	// $50 - 容量取得
+! 		case 0x11: return CtrlDrive(buf);	// $51 - ドライブ制御/状態検査
+! 		case 0x12: return GetDPB(buf);		// $52 - DPB取得
+! 		case 0x13: return DiskRead(buf);		// $53 - セクタ読み込み
+! 		case 0x14: return DiskWrite(buf);	// $54 - セクタ書き込み
+! 		case 0x15: return Ioctrl(buf);		// $55 - IOCTRL
+! 		case 0x16: return Flush(buf);		// $56 - フラッシュ
+! 		case 0x17: return CheckMedia(buf);	// $57 - メディア交換チェック
+! 		case 0x18: return Lock(buf);			// $58 - 排他制御
+! 	}
+! }
+! 
+! //---------------------------------------------------------------------------
+! //
+! //	ファイルシステム書き込み(入力オプションデータ)
+! //
+! //---------------------------------------------------------------------------
+! void FASTCALL FsDriver::WriteFsOpt(BYTE *buf, int num)
+! {
+! 	ASSERT(this);
+! 
+! 	memcpy(optbuf, buf, num);
+! }
+! 
+! //===========================================================================
+! //
+! //	ホストファイルシステム
+! //
+! //===========================================================================
+  
+  #ifdef BAREMETAL
+  //---------------------------------------------------------------------------
+  //
+  // FatFs用タイムスタンプ
+***************
+*** 465,484 ****
+  	ASSERT(this);
+  	ASSERT(szLabel);
+  	ASSERT(m_bEnable);
+  
+  	// ボリュームラベルの取得
+- #ifdef RASCSI
+  	strcpy(m_szVolumeCache, "RASDRV ");
+  	if (m_szBase[0]) {
+  		strcat(m_szVolumeCache, m_szBase);
+  	} else {
+  		strcat(m_szVolumeCache, "/");
+  	}
+- #else
+- 	m_szVolumeCache[0] = _T('\0');
+- #endif
+  
+  	// キャッシュ更新
+  	m_bVolumeCache = TRUE;
+  
+  	// 内容を転送
+--- 1606,1621 ----
+***************
+*** 3615,3624 ****
+--- 4752,4768 ----
+  	char szFrom[FILENAME_MAX];
+  	char szTo[FILENAME_MAX];
+  	SJIS2UTF8(f.GetPath(), szFrom, FILENAME_MAX);
+  	SJIS2UTF8(fNew.GetPath(), szTo, FILENAME_MAX);
+  #ifndef BAREMETAL
++ 	// リネーム先のファイルが既に存在する場合にrename関数の動作は
++ 	// 処理系依存である。POSIXでは上書きなので先にaccess関数で
++ 	// 存在チェックを行って成功すればリネーム処理をエラーとする
++ 	if (access(szTo, F_OK) == 0) {
++ 		return FS_FILENOTFND;
++ 	}
++ 
+  	if (rename(szFrom, szTo)) {
+  #else
+  	if (f_rename(szFrom, szTo) != FR_OK) {
+  #endif	// BAREMETAL
+  		return FS_FILENOTFND;

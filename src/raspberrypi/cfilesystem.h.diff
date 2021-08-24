@@ -1,0 +1,167 @@
+*** C:/Users/dmark/Downloads/rascsi147/src/raspberrypi/cfilesystem.h	Sat Apr 11 22:53:36 2020
+--- C:/Users/dmark/Downloads/rascsi152/src/raspberrypi/fsdriver.h	Fri Mar 26 21:18:34 2021
+***************
+*** 1,24 ****
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+- //
+  //	Powered by XM6 TypeG Technology.
+! //	Copyright (C) 2016-2020 GIMONS
+! //	[ ホストファイルシステム ]
+  //
+  //---------------------------------------------------------------------------
+  
+! #ifndef cfilesystem_h
+! #define cfilesystem_h
+  
+  #ifdef BAREMETAL
+  #include "ffconf.h"
+  #include "ff.h"
+  #endif	// BAREMETAL
+  
+  //---------------------------------------------------------------------------
+  //
+  //	ステータスコード定義
+  //
+  //---------------------------------------------------------------------------
+--- 1,123 ----
+  //---------------------------------------------------------------------------
+  //
+  //	SCSI Target Emulator RaSCSI (*^..^*)
+  //	for Raspberry Pi
+  //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
+! //
+! //	[ ファイルシステムドライバ ]
+  //
+  //---------------------------------------------------------------------------
+  
+! #ifndef fsdriver_h
+! #define fsdriver_h
+  
+  #ifdef BAREMETAL
+  #include "ffconf.h"
+  #include "ff.h"
+  #endif	// BAREMETAL
+  
++ class CFileSys;
++ class FsDriver
++ {
++ public:
++ 	// 基本ファンクション
++ 	FsDriver();
++ 										// コンストラクタ
++ 	virtual ~FsDriver();
++ 										// デストラクタ
++ 
++ 	int FASTCALL Process(BOOL read, int func, int phase, int len, BYTE *buf);
++ 										// 実行
++ 
++ private:
++ 	int FASTCALL ReadFsResult(BYTE *buf);
++ 										// ファイルシステム読み込み(結果コード)
++ 	int FASTCALL ReadFsOut(BYTE *buf);
++ 										// ファイルシステム読み込み(返却データ)
++ 	int FASTCALL ReadFsOpt(BYTE *buf);
++ 										// ファイルシステム読み込み(オプションデータ)
++ 	void FASTCALL WriteFs(int func, BYTE *buf);
++ 										// ファイルシステム書き込み(実行)
++ 	void FASTCALL WriteFsOpt(BYTE *buf, int len);
++ 										// ファイルシステム書き込み(オプションデータ)
++ 
++ 	// コマンドハンドラ
++ 	void FASTCALL InitDevice(BYTE *buf);
++ 										// $40 - デバイス起動
++ 	void FASTCALL CheckDir(BYTE *buf);
++ 										// $41 - ディレクトリチェック
++ 	void FASTCALL MakeDir(BYTE *buf);
++ 										// $42 - ディレクトリ作成
++ 	void FASTCALL RemoveDir(BYTE *buf);
++ 										// $43 - ディレクトリ削除
++ 	void FASTCALL Rename(BYTE *buf);
++ 										// $44 - ファイル名変更
++ 	void FASTCALL Delete(BYTE *buf);
++ 										// $45 - ファイル削除
++ 	void FASTCALL Attribute(BYTE *buf);
++ 										// $46 - ファイル属性取得/設定
++ 	void FASTCALL Files(BYTE *buf);
++ 										// $47 - ファイル検索
++ 	void FASTCALL NFiles(BYTE *buf);
++ 										// $48 - ファイル次検索
++ 	void FASTCALL Create(BYTE *buf);
++ 										// $49 - ファイル作成
++ 	void FASTCALL Open(BYTE *buf);
++ 										// $4A - ファイルオープン
++ 	void FASTCALL Close(BYTE *buf);
++ 										// $4B - ファイルクローズ
++ 	void FASTCALL Read(BYTE *buf);
++ 										// $4C - ファイル読み込み
++ 	void FASTCALL Write(BYTE *buf);
++ 										// $4D - ファイル書き込み
++ 	void FASTCALL Seek(BYTE *buf);
++ 										// $4E - ファイルシーク
++ 	void FASTCALL TimeStamp(BYTE *buf);
++ 										// $4F - ファイル時刻取得/設定
++ 	void FASTCALL GetCapacity(BYTE *buf);
++ 										// $50 - 容量取得
++ 	void FASTCALL CtrlDrive(BYTE *buf);
++ 										// $51 - ドライブ状態検査/制御
++ 	void FASTCALL GetDPB(BYTE *buf);
++ 										// $52 - DPB取得
++ 	void FASTCALL DiskRead(BYTE *buf);
++ 										// $53 - セクタ読み込み
++ 	void FASTCALL DiskWrite(BYTE *buf);
++ 										// $54 - セクタ書き込み
++ 	void FASTCALL Ioctrl(BYTE *buf);
++ 										// $55 - IOCTRL
++ 	void FASTCALL Flush(BYTE *buf);
++ 										// $56 - フラッシュ
++ 	void FASTCALL CheckMedia(BYTE *buf);
++ 										// $57 - メディア交換チェック
++ 	void FASTCALL Lock(BYTE *buf);
++ 										// $58 - 排他制御
++ 
++ 	CFileSys *fs;
++ 										// アクセッサー
++ 	DWORD result;
++ 										// アクセス結果コード
++ 	BYTE outbuf[0x800];
++ 										// アクセス結果バッファ
++ 	DWORD outlen;
++ 										// アクセス結果バッファサイズ
++ 	BYTE optbuf[0x1000000];
++ 										// アクセスバッファ
++ 	DWORD optlen;
++ 										// アクセスバッファサイズ
++ };
++ 
++ //---------------------------------------------------------------------------
++ //
++ //	定数定義
++ //
++ //---------------------------------------------------------------------------
++ #define FILEPATH_MAX		_MAX_PATH
++ 
+  //---------------------------------------------------------------------------
+  //
+  //	ステータスコード定義
+  //
+  //---------------------------------------------------------------------------
+***************
+*** 1177,1182 ****
+  	TCHAR m_szBase[DriveMax][FILEPATH_MAX];
+  										///< ベースパス状態復元用の候補
+  	static DWORD g_nOption;				///< ファイル名変換フラグ
+  };
+  
+! #endif	// cfilesystem_h
+--- 1276,1281 ----
+  	TCHAR m_szBase[DriveMax][FILEPATH_MAX];
+  										///< ベースパス状態復元用の候補
+  	static DWORD g_nOption;				///< ファイル名変換フラグ
+  };
+  
+! #endif	// fsdriver_h
