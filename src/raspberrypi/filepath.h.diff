@@ -1,0 +1,69 @@
+*** src/raspberrypi/filepath.h	Sat Apr 11 22:53:56 2020
+--- src/raspberrypi/filepath.h	Fri Mar 26 21:19:00 2021
+***************
+*** 1,25 ****
+  //---------------------------------------------------------------------------
+  //
+! //	X68000 EMULATOR "XM6"
+  //
+- //	Copyright (C) 2001-2006 ＰＩ．(ytanaka@ipc-tokai.or.jp)
+- //	Copyright (C) 2012-2020 GIMONS
+  //	[ ファイルパス(サブセット) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(filepath_h)
+  #define filepath_h
+  
+- //---------------------------------------------------------------------------
+- //
+- //	定数定義
+- //
+- //---------------------------------------------------------------------------
+- #define FILEPATH_MAX		_MAX_PATH
+- 
+  //===========================================================================
+  //
+  //	ファイルパス
+  //	※代入演算子を用意すること
+  //
+--- 1,21 ----
+  //---------------------------------------------------------------------------
+  //
+! //	SCSI Target Emulator RaSCSI (*^..^*)
+! //	for Raspberry Pi
+! //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2001-2006 PI.(Twitter:@xm6_original)
+! //	Copyright (C) 2012-2021 GIMONS(Twitter:@kugimoto0715)
+  //
+  //	[ ファイルパス(サブセット) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(filepath_h)
+  #define filepath_h
+  
+  //===========================================================================
+  //
+  //	ファイルパス
+  //	※代入演算子を用意すること
+  //
+***************
+*** 46,60 ****
+  										// ショート名取得(const char*)
+  	LPCTSTR FASTCALL GetFileExt() const;
+  										// ショート名取得(LPCTSTR)
+  	BOOL FASTCALL CmpPath(const Filepath& path) const;
+  										// パス比較
+- 
+- 	BOOL FASTCALL Save(Fileio *fio, int ver);
+- 										// セーブ
+- 	BOOL FASTCALL Load(Fileio *fio, int ver);
+- 										// ロード
+  
+  private:
+  	void FASTCALL Split();
+  										// パス分割
+  	void FASTCALL Make();
+--- 42,51 ----

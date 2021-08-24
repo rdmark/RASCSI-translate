@@ -1,0 +1,150 @@
+*** src/raspberrypi/fileio.h	Sat Apr 11 22:53:48 2020
+--- src/raspberrypi/fileio.h	Fri Mar 26 21:18:54 2021
+***************
+*** 1,39 ****
+  //---------------------------------------------------------------------------
+  //
+! //	X68000 EMULATOR "XM6"
+  //
+- //	Copyright (C) 2001-2005 ＰＩ．(ytanaka@ipc-tokai.or.jp)
+- //	Copyright (C) 2013-2020 GIMONS
+  //	[ ファイルI/O(RaSCSI用サブセット) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(fileio_h)
+  #define fileio_h
+  
+  #ifdef BAREMETAL
+  #include "ff.h"
+  #endif	// BAREMETAL
+  
+  //===========================================================================
+  //
+- //	マクロ(Load,Save用)
+- //
+- //===========================================================================
+- #define PROP_IMPORT(f, p) \
+- 	if (!f->Read(&(p), sizeof(p))) {\
+- 		return FALSE;\
+- 	}\
+- 
+- #define PROP_EXPORT(f, p) \
+- 	if (!f->Write(&(p), sizeof(p))) {\
+- 		return FALSE;\
+- 	}\
+- 
+- //===========================================================================
+- //
+  //	ファイルI/O
+  //
+  //===========================================================================
+  class Fileio
+  {
+--- 1,30 ----
+  //---------------------------------------------------------------------------
+  //
+! //	SCSI Target Emulator RaSCSI (*^..^*)
+! //	for Raspberry Pi
+! //	Powered by XM6 TypeG Technology.
+! //
+! //	Copyright (C) 2001-2005 PI.(Twitter:@xm6_original)
+! //	Copyright (C) 2013-2021 GIMONS(Twitter:@kugimoto0715)
+  //
+  //	[ ファイルI/O(RaSCSI用サブセット) ]
+  //
+  //---------------------------------------------------------------------------
+  
+  #if !defined(fileio_h)
+  #define fileio_h
+  
++ #include "os.h"
++ #include "rascsi.h"
++ 
+  #ifdef BAREMETAL
+  #include "ff.h"
+  #endif	// BAREMETAL
+  
+  //===========================================================================
+  //
+  //	ファイルI/O
+  //
+  //===========================================================================
+  class Fileio
+  {
+***************
+*** 57,74 ****
+  
+  	BOOL FASTCALL Open(LPCTSTR fname, OpenMode mode);
+  										// オープン
+  	BOOL FASTCALL Open(const Filepath& path, OpenMode mode);
+  										// オープン
+- #ifndef BAREMETAL
+- 	BOOL FASTCALL OpenDIO(LPCTSTR fname, OpenMode mode);
+- 										// オープン
+- 	BOOL FASTCALL OpenDIO(const Filepath& path, OpenMode mode);
+- 										// オープン
+- #endif	// BAREMETAL
+  	BOOL FASTCALL Seek(off64_t offset, BOOL relative = FALSE);
+  										// シーク
+  	BOOL FASTCALL Read(void *buffer, int size);
+  										// 読み込み
+  	BOOL FASTCALL Write(const void *buffer, int size);
+  										// 書き込み
+  	off64_t FASTCALL GetFileSize();
+--- 48,61 ----
+  
+  	BOOL FASTCALL Open(LPCTSTR fname, OpenMode mode);
+  										// オープン
+  	BOOL FASTCALL Open(const Filepath& path, OpenMode mode);
+  										// オープン
+  	BOOL FASTCALL Seek(off64_t offset, BOOL relative = FALSE);
+  										// シーク
++ 	BOOL FASTCALL ReadLine(LPTSTR buffer, int size);
++ 										// Read one line
+  	BOOL FASTCALL Read(void *buffer, int size);
+  										// 読み込み
+  	BOOL FASTCALL Write(const void *buffer, int size);
+  										// 書き込み
+  	off64_t FASTCALL GetFileSize();
+***************
+*** 84,98 ****
+  #endif	// BAREMETAL
+  										// 有効チェック
+  
+  private:
+  #ifndef BAREMETAL
+- 	BOOL FASTCALL Open(LPCTSTR fname, OpenMode mode, BOOL directIO);
+- 										// オープン
+- 
+  	int handle;							// ファイルハンドル
+  #else
+  	FIL handle;							// ファイルハンドル
+  #endif	// BAREMETAL
+  };
+  
+  #endif	// fileio_h
+--- 71,93 ----
+  #endif	// BAREMETAL
+  										// 有効チェック
+  
+  private:
+  #ifndef BAREMETAL
+  	int handle;							// ファイルハンドル
+  #else
+  	FIL handle;							// ファイルハンドル
++ 
++ 	DWORD cltbl[256];					// Clustering map table
++ 
+  #endif	// BAREMETAL
++ 	BOOL m_bOpen;
++ 										// Open state
++ 	TCHAR m_szPath[_MAX_PATH];
++ 										// File path
++ 	OpenMode m_Mode;
++ 										// Open mode
++ 	off64_t m_position;
++ 										// Current position
+  };
+  
+  #endif	// fileio_h
