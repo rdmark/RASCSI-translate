@@ -13,7 +13,7 @@
   //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
   //	Imported sava's bugfix patch(in RASDRV DOS edition).
   //
-! //	[ ホストファイルシステム ]
+! //	[ Host file system ]
   //
   //---------------------------------------------------------------------------
   
@@ -39,7 +39,7 @@
   //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
   //	Imported sava's bugfix patch(in RASDRV DOS edition).
   //
-! //	[ ファイルシステムドライバ ]
+! //	[ File system driver ]
   //
   //---------------------------------------------------------------------------
   
@@ -50,14 +50,14 @@
 ! 
 ! //===========================================================================
 ! //
-! //	ファイルシステムドライバ
+! //	File system driver
 ! //
 ! //===========================================================================
 ! static FsDriver *self;
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	コールバック関数
+! //	Callback function
 ! //
 ! //---------------------------------------------------------------------------
 ! int FsCallback(BOOL read, int func, int phase, int len, BYTE *buf)
@@ -69,27 +69,27 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	コンストラクタ
+! //	Constructor
 ! //
 ! //---------------------------------------------------------------------------
 ! FsDriver::FsDriver()
 ! {
-! 	// ホストファイルシステム生成
+! 	// Create host file system
 ! 	fs = new CFileSys();
 ! 	fs->Reset();
 ! 
-! 	// 自身を保存
+! 	// Store self
 ! 	self = this;
 ! }
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	デストラクタ
+! //	Destructor
 ! //
 ! //---------------------------------------------------------------------------
 ! FsDriver::~FsDriver()
 ! {
-! 	// ホストファイルシステム解放
+! 	// Release host file system
 ! 	if (fs) {
 ! 		fs->Reset();
 ! 		delete fs;
@@ -98,7 +98,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	実行
+! //	Execute
 ! //
 ! //---------------------------------------------------------------------------
 ! int FASTCALL FsDriver::Process(
@@ -108,35 +108,35 @@
 ! 
 ! 	if (read) {
 ! 		switch (phase) {
-! 			case 0:		// 結果コード取得
+! 			case 0:		// Get result code
 ! 				return ReadFsResult(buf);
 ! 
-! 			case 1:		// 返却データ取得
+! 			case 1:		// Get return data_sector
 ! 				return ReadFsOut(buf);
 ! 
-! 			case 2:		// 返却追加データ取得
+! 			case 2:		// Get additional return data
 ! 				return ReadFsOpt(buf);
 ! 		}
 ! 	} else {
 ! 		switch (phase) {
-! 			case 0:		// コマンド発行
+! 			case 0:		// Issue command
 ! 				WriteFs(func, buf);
 ! 				return len;
 ! 
-! 			case 1:		// 追加データ書き込み
+! 			case 1:		// Write additional data
 ! 				WriteFsOpt(buf, len);
 ! 				return len;
 ! 		}
 ! 	}
 ! 
-! 	// エラー
+! 	// Error
 ! 	ASSERT(FALSE);
 ! 	return 0;
 ! }
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $40 - デバイス起動
+! //  $40 - Boot device
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::InitDevice(BYTE *buf)
@@ -151,7 +151,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $41 - ディレクトリチェック
+! //  $41 - Directory check
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::CheckDir(BYTE *buf)
@@ -178,7 +178,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $42 - ディレクトリ作成
+! //  $42 - Create directory
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::MakeDir(BYTE *buf)
@@ -205,7 +205,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $43 - ディレクトリ削除
+! //  $43 - Delete directory
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::RemoveDir(BYTE *buf)
@@ -232,7 +232,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $44 - ファイル名変更
+! //  $44 - Change file name
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Rename(BYTE *buf)
@@ -263,7 +263,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $45 - ファイル削除
+! //  $45 - Delete file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Delete(BYTE *buf)
@@ -290,7 +290,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $46 - ファイル属性取得/設定
+! //  $46 - Get / set file attribute
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Attribute(BYTE *buf)
@@ -322,7 +322,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $47 - ファイル検索
+! //  $47 - Search file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Files(BYTE *buf)
@@ -376,7 +376,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $48 - ファイル次検索
+! //  $48 - Search next file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::NFiles(BYTE *buf)
@@ -426,7 +426,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $49 - ファイル作成
+! //  $49 - Create file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Create(BYTE *buf)
@@ -491,7 +491,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4A - ファイルオープン
+! //  $4A - Open file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Open(BYTE *buf)
@@ -545,7 +545,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4B - ファイルクローズ
+! //  $4B - Close file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Close(BYTE *buf)
@@ -595,7 +595,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4C - ファイル読み込み
+! //  $4C - Read file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Read(BYTE *buf)
@@ -647,7 +647,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4D - ファイル書き込み
+! //  $4D - Write file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Write(BYTE *buf)
@@ -697,7 +697,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4E - ファイルシーク
+! //  $4E - Seek file
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Seek(BYTE *buf)
@@ -753,7 +753,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $4F - ファイル時刻取得/設定
+! //  $4F - Get / set file timestamp
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::TimeStamp(BYTE *buf)
@@ -808,7 +808,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $50 - 容量取得
+! //  $50 - Get capacity
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::GetCapacity(BYTE *buf)
@@ -840,7 +840,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $51 - ドライブ状態検査/制御
+! //  $51 - Inspect / control drive state
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::CtrlDrive(BYTE *buf)
@@ -870,7 +870,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $52 - DPB取得
+! //  $52 - Get DPB
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::GetDPB(BYTE *buf)
@@ -904,7 +904,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $53 - セクタ読み込み
+! //  $53 - Read sector
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::DiskRead(BYTE *buf)
@@ -938,7 +938,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $54 - セクタ書き込み
+! //  $54 - Write sector
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::DiskWrite(BYTE *buf)
@@ -1015,7 +1015,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $56 - フラッシュ
+! //  $56 - Flush
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Flush(BYTE *buf)
@@ -1038,7 +1038,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $57 - メディア交換チェック
+! //  $57 - Media change check
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::CheckMedia(BYTE *buf)
@@ -1061,7 +1061,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //  $58 - 排他制御
+! //  $58 - Mutual exclusion
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::Lock(BYTE *buf)
@@ -1084,7 +1084,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	ファイルシステム読み込み(結果コード)
+! //	Read file system (result code)
 ! //
 ! //---------------------------------------------------------------------------
 ! int FASTCALL FsDriver::ReadFsResult(BYTE *buf)
@@ -1101,7 +1101,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	ファイルシステム読み込み(返却データ)
+! //	Read file system (return data)
 ! //
 ! //---------------------------------------------------------------------------
 ! int FASTCALL FsDriver::ReadFsOut(BYTE *buf)
@@ -1115,7 +1115,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	ファイルシステム読み込み(返却オプションデータ)
+! //	Read file system (return option data)
 ! //
 ! //---------------------------------------------------------------------------
 ! int FASTCALL FsDriver::ReadFsOpt(BYTE *buf)
@@ -1129,7 +1129,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	ファイルシステム書き込み
+! //	Write file system
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::WriteFs(int func, BYTE *buf)
@@ -1141,40 +1141,40 @@
 ! 	outlen = 0;
 ! 	optlen = 0;
 ! 
-! 	// コマンド分岐
+! 	// Command branching
 ! 	func &= 0x1f;
 ! 	switch (func) {
-! 		case 0x00: return InitDevice(buf);	// $40 - デバイス起動
-! 		case 0x01: return CheckDir(buf);		// $41 - ディレクトリチェック
-! 		case 0x02: return MakeDir(buf);		// $42 - ディレクトリ作成
-! 		case 0x03: return RemoveDir(buf);	// $43 - ディレクトリ削除
-! 		case 0x04: return Rename(buf);		// $44 - ファイル名変更
-! 		case 0x05: return Delete(buf);		// $45 - ファイル削除
-! 		case 0x06: return Attribute(buf);	// $46 - ファイル属性取得/設定
-! 		case 0x07: return Files(buf);		// $47 - ファイル検索
-! 		case 0x08: return NFiles(buf);		// $48 - ファイル次検索
-! 		case 0x09: return Create(buf);		// $49 - ファイル作成
-! 		case 0x0A: return Open(buf);			// $4A - ファイルオープン
-! 		case 0x0B: return Close(buf);		// $4B - ファイルクローズ
-! 		case 0x0C: return Read(buf);			// $4C - ファイル読み込み
-! 		case 0x0D: return Write(buf);		// $4D - ファイル書き込み
-! 		case 0x0E: return Seek(buf);			// $4E - ファイルシーク
-! 		case 0x0F: return TimeStamp(buf);	// $4F - ファイル更新時刻の取得/設定
-! 		case 0x10: return GetCapacity(buf);	// $50 - 容量取得
-! 		case 0x11: return CtrlDrive(buf);	// $51 - ドライブ制御/状態検査
-! 		case 0x12: return GetDPB(buf);		// $52 - DPB取得
-! 		case 0x13: return DiskRead(buf);		// $53 - セクタ読み込み
-! 		case 0x14: return DiskWrite(buf);	// $54 - セクタ書き込み
+! 		case 0x00: return InitDevice(buf);	// $40 - Boot device
+! 		case 0x01: return CheckDir(buf);		// $41 - Check directory
+! 		case 0x02: return MakeDir(buf);		// $42 - Create directory
+! 		case 0x03: return RemoveDir(buf);	// $43 - Delete directory
+! 		case 0x04: return Rename(buf);		// $44 - Change file name
+! 		case 0x05: return Delete(buf);		// $45 - Delete file
+! 		case 0x06: return Attribute(buf);	// $46 - Get / set file attribute
+! 		case 0x07: return Files(buf);		// $47 - Search files
+! 		case 0x08: return NFiles(buf);		// $48 - Search next file
+! 		case 0x09: return Create(buf);		// $49 - Create file
+! 		case 0x0A: return Open(buf);			// $4A - Open file
+! 		case 0x0B: return Close(buf);		// $4B - Close file
+! 		case 0x0C: return Read(buf);			// $4C - Read file
+! 		case 0x0D: return Write(buf);		// $4D - Write file
+! 		case 0x0E: return Seek(buf);			// $4E - Seek file
+! 		case 0x0F: return TimeStamp(buf);	// $4F - Get / set file timestamp
+! 		case 0x10: return GetCapacity(buf);	// $50 - Get capacity
+! 		case 0x11: return CtrlDrive(buf);	// $51 - Inspect / control drive state
+! 		case 0x12: return GetDPB(buf);		// $52 - Get DPB
+! 		case 0x13: return DiskRead(buf);		// $53 - Read sector
+! 		case 0x14: return DiskWrite(buf);	// $54 - Write sector
 ! 		case 0x15: return Ioctrl(buf);		// $55 - IOCTRL
-! 		case 0x16: return Flush(buf);		// $56 - フラッシュ
-! 		case 0x17: return CheckMedia(buf);	// $57 - メディア交換チェック
-! 		case 0x18: return Lock(buf);			// $58 - 排他制御
+! 		case 0x16: return Flush(buf);		// $56 - Flush
+! 		case 0x17: return CheckMedia(buf);	// $57 - Media change check
+! 		case 0x18: return Lock(buf);			// $58 - Mutual exclusion
 ! 	}
 ! }
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	ファイルシステム書き込み(入力オプションデータ)
+! //	File system write (input option data)
 ! //
 ! //---------------------------------------------------------------------------
 ! void FASTCALL FsDriver::WriteFsOpt(BYTE *buf, int num)
@@ -1186,7 +1186,7 @@
 ! 
 ! //===========================================================================
 ! //
-! //	ホストファイルシステム
+! //	Host file system
 ! //
 ! //===========================================================================
   
@@ -1225,9 +1225,9 @@
   	SJIS2UTF8(f.GetPath(), szFrom, FILENAME_MAX);
   	SJIS2UTF8(fNew.GetPath(), szTo, FILENAME_MAX);
   #ifndef BAREMETAL
-+ 	// リネーム先のファイルが既に存在する場合にrename関数の動作は
-+ 	// 処理系依存である。POSIXでは上書きなので先にaccess関数で
-+ 	// 存在チェックを行って成功すればリネーム処理をエラーとする
++ 	// The behavior of the rename function in the case a file already exists is 
++ 	// implementation dependent. In POSIX it leads to an overwrite, so this checks 
++ 	// if the file exists and will throw an error if successful.
 + 	if (access(szTo, F_OK) == 0) {
 + 		return FS_FILENOTFND;
 + 	}

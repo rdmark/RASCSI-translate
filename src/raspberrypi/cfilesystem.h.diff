@@ -35,7 +35,7 @@
 ! //
 ! //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
 ! //
-! //	[ ファイルシステムドライバ ]
+! //	[ File system driver ]
   //
   //---------------------------------------------------------------------------
   
@@ -51,96 +51,96 @@
 + class FsDriver
 + {
 + public:
-+ 	// 基本ファンクション
++ 	// Base functions
 + 	FsDriver();
-+ 										// コンストラクタ
++ 										// Constructor
 + 	virtual ~FsDriver();
-+ 										// デストラクタ
++ 										// Destructor
 + 
 + 	int FASTCALL Process(BOOL read, int func, int phase, int len, BYTE *buf);
-+ 										// 実行
++ 										// Execute
 + 
 + private:
 + 	int FASTCALL ReadFsResult(BYTE *buf);
-+ 										// ファイルシステム読み込み(結果コード)
++ 										// File system read (result code)
 + 	int FASTCALL ReadFsOut(BYTE *buf);
-+ 										// ファイルシステム読み込み(返却データ)
++ 										// File system read (return data)
 + 	int FASTCALL ReadFsOpt(BYTE *buf);
-+ 										// ファイルシステム読み込み(オプションデータ)
++ 										// File system read (option data)
 + 	void FASTCALL WriteFs(int func, BYTE *buf);
-+ 										// ファイルシステム書き込み(実行)
++ 										// File system write (execute)
 + 	void FASTCALL WriteFsOpt(BYTE *buf, int len);
-+ 										// ファイルシステム書き込み(オプションデータ)
++ 										// File system write (option data)
 + 
-+ 	// コマンドハンドラ
++ 	// Command handler
 + 	void FASTCALL InitDevice(BYTE *buf);
-+ 										// $40 - デバイス起動
++ 										// $40 - Boot device
 + 	void FASTCALL CheckDir(BYTE *buf);
-+ 										// $41 - ディレクトリチェック
++ 										// $41 - Directory check
 + 	void FASTCALL MakeDir(BYTE *buf);
-+ 										// $42 - ディレクトリ作成
++ 										// $42 - Create directory
 + 	void FASTCALL RemoveDir(BYTE *buf);
-+ 										// $43 - ディレクトリ削除
++ 										// $43 - Delete directory
 + 	void FASTCALL Rename(BYTE *buf);
-+ 										// $44 - ファイル名変更
++ 										// $44 - Change file name
 + 	void FASTCALL Delete(BYTE *buf);
-+ 										// $45 - ファイル削除
++ 										// $45 - Delete file
 + 	void FASTCALL Attribute(BYTE *buf);
-+ 										// $46 - ファイル属性取得/設定
++ 										// $46 - Get / set file attribute
 + 	void FASTCALL Files(BYTE *buf);
-+ 										// $47 - ファイル検索
++ 										// $47 - Search files
 + 	void FASTCALL NFiles(BYTE *buf);
-+ 										// $48 - ファイル次検索
++ 										// $48 - Search next file
 + 	void FASTCALL Create(BYTE *buf);
-+ 										// $49 - ファイル作成
++ 										// $49 - Create file
 + 	void FASTCALL Open(BYTE *buf);
-+ 										// $4A - ファイルオープン
++ 										// $4A - Open file
 + 	void FASTCALL Close(BYTE *buf);
-+ 										// $4B - ファイルクローズ
++ 										// $4B - Close file
 + 	void FASTCALL Read(BYTE *buf);
-+ 										// $4C - ファイル読み込み
++ 										// $4C - Read file
 + 	void FASTCALL Write(BYTE *buf);
-+ 										// $4D - ファイル書き込み
++ 										// $4D - Write file
 + 	void FASTCALL Seek(BYTE *buf);
-+ 										// $4E - ファイルシーク
++ 										// $4E - Seek file
 + 	void FASTCALL TimeStamp(BYTE *buf);
-+ 										// $4F - ファイル時刻取得/設定
++ 										// $4F - Get / set file timestamp
 + 	void FASTCALL GetCapacity(BYTE *buf);
-+ 										// $50 - 容量取得
++ 										// $50 - Get capacity
 + 	void FASTCALL CtrlDrive(BYTE *buf);
-+ 										// $51 - ドライブ状態検査/制御
++ 										// $51 - Inspect / control drive state
 + 	void FASTCALL GetDPB(BYTE *buf);
-+ 										// $52 - DPB取得
++ 										// $52 - Get DPB
 + 	void FASTCALL DiskRead(BYTE *buf);
-+ 										// $53 - セクタ読み込み
++ 										// $53 - Read sector
 + 	void FASTCALL DiskWrite(BYTE *buf);
-+ 										// $54 - セクタ書き込み
++ 										// $54 - Write sector
 + 	void FASTCALL Ioctrl(BYTE *buf);
 + 										// $55 - IOCTRL
 + 	void FASTCALL Flush(BYTE *buf);
-+ 										// $56 - フラッシュ
++ 										// $56 - Flush
 + 	void FASTCALL CheckMedia(BYTE *buf);
-+ 										// $57 - メディア交換チェック
++ 										// $57 - Media change check
 + 	void FASTCALL Lock(BYTE *buf);
-+ 										// $58 - 排他制御
++ 										// $58 - Mutual exclusion
 + 
 + 	CFileSys *fs;
-+ 										// アクセッサー
++ 										// Accessory
 + 	DWORD result;
-+ 										// アクセス結果コード
++ 										// Access result code
 + 	BYTE outbuf[0x800];
-+ 										// アクセス結果バッファ
++ 										// Access result buffer
 + 	DWORD outlen;
-+ 										// アクセス結果バッファサイズ
++ 										// Access result buffer size
 + 	BYTE optbuf[0x1000000];
-+ 										// アクセスバッファ
++ 										// Access buffer
 + 	DWORD optlen;
-+ 										// アクセスバッファサイズ
++ 										// Access buffer size
 + };
 + 
 + //---------------------------------------------------------------------------
 + //
-+ //	定数定義
++ //	Constant definition
 + //
 + //---------------------------------------------------------------------------
 + #define FILEPATH_MAX		_MAX_PATH

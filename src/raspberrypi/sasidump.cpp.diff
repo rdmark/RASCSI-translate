@@ -100,7 +100,7 @@
   		return FALSE;
   	}
   
-+ 	// イニシエータモードに設定
++ 	// Set initiator mode
 + 	bus.SetMode(GPIOBUS::INITIATOR);
 + 
   	// ワーク初期化
@@ -116,7 +116,7 @@
   	BYTE data;
   	int count;
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
 + 
   	// ID設定とSELアサート
@@ -132,7 +132,7 @@
   		return FALSE;
   	}
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
 + 
   	// コマンド送信
@@ -148,7 +148,7 @@
   		return -1;
   	}
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
 + 
   	// データ受信
@@ -164,7 +164,7 @@
   		return -1;
   	}
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_OUT);
 + 
   	// データ受信
@@ -180,7 +180,7 @@
   		return -2;
   	}
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
 + 
   	// データ受信
@@ -196,7 +196,7 @@
   		return -2;
   	}
   
-+ 	// データバス方向設定
++ 	// Set data bus direction
 + 	bus.SetDataDirection(GPIOBUS::DATA_DIR_IN);
 + 
   	// データ受信

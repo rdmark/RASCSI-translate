@@ -25,8 +25,8 @@
   //	定数宣言
   //
   //---------------------------------------------------------------------------
-  #define CtrlMax	8					// 最大SCSIコントローラ数
-! #define UnitNum	2					// コントローラ辺りのユニット数
+  #define CtrlMax	8					// Max number of SCSI controllers
+! #define UnitNum	2					// Number of units per controller
 ! #ifdef BAREMETAL
 ! #define FPRT(fp, ...) printf( __VA_ARGS__ )
 ! #else
@@ -86,18 +86,18 @@
   //	定数宣言
   //
   //---------------------------------------------------------------------------
-  #define CtrlMax	8					// 最大SCSIコントローラ数
-! #define UnitNum	2					// コントローラ毎ののユニット数
+  #define CtrlMax	8					// Max number of SCSI controllers
+! #define UnitNum	2					// Number of units per controller
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	列挙子定義
+! //	Enum definitions
 ! //
 ! //---------------------------------------------------------------------------
 ! enum execprio_e {
-! 	PRIO_NORMAL		= 0,		// ノーマル
-! 	PRIO_MIN		= 1,		// 最低
-! 	PRIO_MAX		= 2			// 最高
+! 	PRIO_NORMAL		= 0,		// Normal
+! 	PRIO_MIN		= 1,		// Min
+! 	PRIO_MAX		= 2			// Max
 ! };
   
   //---------------------------------------------------------------------------
@@ -107,11 +107,11 @@
   //---------------------------------------------------------------------------
   static volatile BOOL running;		// 実行中フラグ
   static volatile BOOL active;		// 処理中フラグ
-+ char logbuf[4096];					// ログバッファ
++ char logbuf[4096];					// Log buffer
   SASIDEV *ctrl[CtrlMax];				// コントローラ
   Disk *disk[CtrlMax * UnitNum];		// ディスク
   GPIOBUS *bus;						// GPIOバス
-+ SCSIBR *scsibr;						// ブリッジデバイス
++ SCSIBR *scsibr;						// Bridge device
   #ifdef BAREMETAL
   FATFS fatfs;						// FatFS
   #else
@@ -119,19 +119,19 @@
   pthread_t monthread;				// モニタースレッド
   static void *MonThread(void *param);
   #endif	// BAREMETAL
-+ BOOL haltreq;						// HALT要求
++ BOOL haltreq;						// HALT request
 + 
 + #if USE_BRIDGE_NET == 1
-+ NetDriver *netdrv;					// ネットワークドライバ
++ NetDriver *netdrv;					// Network driver
 + #endif	// USE_BRIDGE_NET == 1
 + 
 + #if USE_BRIDGE_FS == 1
-+ FsDriver *fsdrv;					// ファイルシステムドライバ
++ FsDriver *fsdrv;					// File system driver
 + #endif	// USE_BRIDGE_FS == 1
 + 
 + //---------------------------------------------------------------------------
 + //
-+ //	プロトタイプ宣言
++ //	Prototype declarations
 + //
 + //---------------------------------------------------------------------------
 + int CtlCallback(BOOL, int, int, int, BYTE *);
@@ -140,7 +140,7 @@
 + 
 + //---------------------------------------------------------------------------
 + //
-+ //	スレッドを特定のCPUに固定する
++ //	Fix a thread to a CPU
 + //
 + //---------------------------------------------------------------------------
 + void FixCpu(int cpu)
@@ -149,12 +149,12 @@
 + 	cpu_set_t cpuset;
 + 	int cpus;
 + 
-+ 	// CPU数取得
++ 	// Get no. of CPUs
 + 	CPU_ZERO(&cpuset);
 + 	sched_getaffinity(0, sizeof(cpu_set_t), &cpuset);
 + 	cpus = CPU_COUNT(&cpuset);
 + 
-+ 	// アフィニティ設定
++ 	// Set affinity
 + 	if (cpu < cpus) {
 + 		CPU_ZERO(&cpuset);
 + 		CPU_SET(cpu, &cpuset);
@@ -165,7 +165,7 @@
 + 
 + //---------------------------------------------------------------------------
 + //
-+ //	実行優先順位設定
++ //	Set execution priority
 + //
 + //---------------------------------------------------------------------------
 + void SetExecPrio(execprio_e prio)
@@ -250,7 +250,7 @@
   
   //---------------------------------------------------------------------------
   //
-+ //	ログ出力
++ //	Log output
 + //
 + //---------------------------------------------------------------------------
 + void LogWrite(FILE *fp, const char *format, ...)
@@ -259,13 +259,13 @@
 + 	va_list args;
 + 	va_start(args, format);
 + 
-+ 	// フォーマット
++ 	// Format
 + 	vsprintf(buffer, format, args);
 + 
-+ 	// 可変長引数終了
++ 	// End variable length arguments
 + 	va_end(args);
 + 
-+ 	// ログ出力
++ 	// Output logs
 + 	if (!fp) {
 + 		strcat(logbuf, buffer);
 + 	} else {
@@ -335,7 +335,7 @@
 + #endif	// BAREMETAL
 + 
 + #ifdef BAREMETAL
-+ 	// SDカードマウント
++ 	// Mount SD card
 + 	fr = f_mount(&fatfs, "", 1);
 + 	if (fr != FR_OK) {
 + 		LogWrite(stderr, "Error : SD card mount failed.\n");
@@ -393,7 +393,7 @@
   		return FALSE;
   	}
   
-+ 	// ターゲットモード
++ 	// Target mode
 + 	bus->SetMode(GPIOBUS::TARGET);
 + 
   	// バスリセット
@@ -409,12 +409,12 @@
   		disk[i] = NULL;
   	}
   
-+ 	// ホストブリッジ
++ 	// Host bridge
 + 	scsibr = new SCSIBR();
 + 	scsibr->SetMsgFunc(0, CtlCallback);
 + 
 + #if USE_BRIDGE_NET == 1
-+ 	// ネットワークドライバ
++ 	// Network driver
 + 	netdrv = new NetDriver();
 + 	if (netdrv->IsNetEnable()) {
 + 		scsibr->SetMsgFunc(1, NetCallback);
@@ -422,7 +422,7 @@
 + #endif	// USE_BRIDGE_NET == 1
 + 
 + #if USE_BRIDGE_FS == 1
-+ 	// ファイルシステムドライバ
++ 	// File system driver
 + 	fsdrv = new FsDriver();
 + 	scsibr->SetMsgFunc(2, FsCallback);
 + #endif	// USE_BRIDGE_FS == 1
@@ -459,20 +459,20 @@
   	int i;
   
 + #if USE_BRIDGE_NET == 1
-+ 	// ネットワークドライバ削除
++ 	// Delete network driver
 + 	if (netdrv) {
 + 		delete netdrv;
 + 	}
 + #endif	// USE_BRIDGE_NET == 1
 + 
 + #if USE_BRIDGE_FS == 1
-+ 	// ファイルシステムドライバ削除
++ 	// Delete file system driver
 + 	if (fsdrv) {
 + 		delete fsdrv;
 + 	}
 + #endif	// USE_BRIDGE_FS == 1
 + 
-+ 	// ブリッジデバイス削除
++ 	// Delete bridge device
 + 	if (scsibr) {
 + 		delete scsibr;
 + 	}
@@ -819,7 +819,7 @@
   				return FALSE;
   		}
   
-! 		// ファイルの確認を行う
+! 		// Carry out file check
 ! 		if (filecheck) {
   			// パスを設定
   			filepath.SetPath(file);
@@ -1019,7 +1019,7 @@
   
   //---------------------------------------------------------------------------
   //
-! //	コマンド解析
+! //	Parse command
   //
   //---------------------------------------------------------------------------
 ! BOOL ParseCmd(char *argID, char *argPath)
@@ -1031,41 +1031,41 @@
   	char *ext;
   
 ! 	if (strlen(argID) == 3 && _xstrncasecmp(argID, "id", 2) == 0) {
-! 		// ID or idの形式
+! 		// ID or id format
 ! 
-! 		// ID番号をチェック(0-7)
+! 		// Check ID no. (0-7)
 ! 		if (argID[2] < '0' || argID[2] > '7') {
 ! 			LogWrite(stderr,
 ! 				"Error : Invalid argument(IDn n=0-7) [%c]\n", argID[2]);
 ! 			return FALSE;
 ! 		}
 ! 
-! 		// ID,ユニット確定
+! 		// Set ID, unit
 ! 		id = argID[2] - '0';
 ! 		un = 0;
 ! 	} else if (_xstrncasecmp(argID, "hd", 2) == 0) {
-! 		// HD or hdの形式
+! 		// HD or hd format
 ! 
 ! 		if (strlen(argID) == 3) {
-! 			// HD番号をチェック(0-9)
+! 			// Check HD no. (0-9)
 ! 			if (argID[2] < '0' || argID[2] > '9') {
 ! 				LogWrite(stderr,
 ! 					"Error : Invalid argument(HDn n=0-15) [%c]\n", argID[2]);
 ! 				return FALSE;
 ! 			}
 ! 
-! 			// ID,ユニット確定
+! 			// Check ID, unit no.
 ! 			id = (argID[2] - '0') / UnitNum;
 ! 			un = (argID[2] - '0') % UnitNum;
 ! 		} else if (strlen(argID) == 4) {
-! 			// HD番号をチェック(10-15)
+! 			// Check HD no. (10-15)
 ! 			if (argID[2] != '1' || argID[3] < '0' || argID[3] > '5') {
 ! 				LogWrite(stderr,
 ! 					"Error : Invalid argument(HDn n=0-15) [%c]\n", argID[2]);
 ! 				return FALSE;
 ! 			}
 ! 
-! 			// ID,ユニット確定
+! 			// Check ID, unit no.
 ! 			id = ((argID[3] - '0') + 10) / UnitNum;
 ! 			un = ((argID[3] - '0') + 10) % UnitNum;
 ! 		} else {
@@ -1079,26 +1079,26 @@
   		return FALSE;
   	}
   
-! 	// すでにアクティブなデバイスがあるならスキップ
+! 	// Skip if there is an active device
 ! 	if (disk[id * UnitNum + un] &&
 ! 		!disk[id * UnitNum + un]->IsNULL()) {
 ! 		return TRUE;
 ! 	}
 ! 
-! 	// デバイスタイプを初期化
+! 	// Init device type
 ! 	type = -1;
 ! 
-! 	// イーサネットとホストブリッジのチェック
+! 	// Check ethernet and host bridge
 ! 	if (_xstrcasecmp(argPath, "bridge") == 0) {
 ! 		type = 4;
 ! 	} else if (_xstrcasecmp(argPath, "mo") == 0) {
-! 		// ファイル指定なしでMOとみなす
+! 		// Without specifying a file, assume MO
 ! 		type = 2;
 ! 	} else if (_xstrcasecmp(argPath, "cd") == 0) {
-! 		// ファイル指定なしでCDとみなす
+! 		// Without specifying a file, assume CD
 ! 		type = 3;
 ! 	} else {
-! 		// パスの長さをチェック
+! 		// Check path length
 ! 		len = strlen(argPath);
 ! 		if (len < 5) {
 ! 			LogWrite(stderr,
@@ -1107,14 +1107,14 @@
 ! 			return FALSE;
 ! 		}
 ! 
-! 		// 拡張子を持っているか？
+! 		// Does it have a file extension?
 ! 		if (argPath[len - 4] != '.') {
 ! 			LogWrite(stderr,
 ! 				"Error : Invalid argument(No extension) [%s]\n", argPath);
 ! 			return FALSE;
 ! 		}
 ! 
-! 		// タイプを決める
+! 		// Decide a type
 ! 		ext = &argPath[len - 3];
 ! 		if (_xstrcasecmp(ext, "hdf") == 0 ||
 ! 			_xstrcasecmp(ext, "hds") == 0 ||
@@ -1131,14 +1131,14 @@
 ! 			// CD
 ! 			type = 3;
 ! 		} else {
-! 			// タイプが判別できない
+! 			// Cannot identify type
 ! 			LogWrite(stderr,
 ! 				"Error : Invalid argument(file type) [%s]\n", ext);
 ! 			return FALSE;
 ! 		}
 ! 	}
 ! 
-! 	// コマンド実行
+! 	// Execute command
 ! 	if (!ProcessCmd(stderr, id, un, 0, type, argPath)) {
   		return FALSE;
   	}
@@ -1148,7 +1148,7 @@
 ! 
 ! //---------------------------------------------------------------------------
 ! //
-! //	引数処理
+! //	Process arguments
 ! //
 ! //---------------------------------------------------------------------------
 ! BOOL ParseArgument(int argc, char* argv[])
@@ -1162,7 +1162,7 @@
   		return TRUE;
   	}
 + 
-+ 	// コマンド名をスキップ
++ 	// Skip command name
   	i = 1;
   	argc--;
   
@@ -1174,11 +1174,11 @@
   
 + 		argc -= 2;
 + 
-+ 		// IDとパスを取得
++ 		// Get ID and path
 + 		argID = argv[i++];
 + 		argPath = argv[i++];
 + 
-+ 		// 事前チェック
++ 		// Pre check
 + 		if (argID[0] != '-') {
 + 			LogWrite(stderr,
 + 				"Error : Invalid argument(-IDn or -HDn) [%s]\n", argID);
@@ -1186,7 +1186,7 @@
 + 		}
 + 		argID++;
 + 
-+ 		// コマンド解析
++ 		// Parse command
 + 		ParseCmd(argID, argPath);
 + 	}
 + 
@@ -1195,7 +1195,7 @@
 + 
 + //---------------------------------------------------------------------------
 + //
-+ //	設定ファイル処理
++ //	Process config file
 + //
 + //---------------------------------------------------------------------------
 + BOOL ParseConfigFile(char *file)
@@ -1208,13 +1208,13 @@
 + 	char *p;
 + 	char *q;
 + 
-+ 	// 設定ファイルがなければ処理を中断
++ 	// Stop processing if there is no file set
 + 	if (!fio.Open(file, Fileio::ReadOnly)) {
 + 		LogWrite(stdout, "Error : %s is not found.\n", file);
 + 		return FALSE;
 + 	}
 + 
-+ 	// 解読開始
++ 	// Start interpreting
   	while (TRUE) {
   		// 1行取得
   		memset(line, 0x00, sizeof(line));
@@ -1395,7 +1395,7 @@
 - #ifndef BAREMETAL
   //---------------------------------------------------------------------------
   //
-! //	スレッドを特定のCPUに固定する
+! //	Bind thread to a single CPU
   //
   //---------------------------------------------------------------------------
 ! void FixCpu(int cpu)
@@ -1403,12 +1403,12 @@
 ! 	cpu_set_t cpuset;
 ! 	int cpus;
   
-! 	// CPU数取得
+! 	// Get no. of CPUs
 ! 	CPU_ZERO(&cpuset);
 ! 	sched_getaffinity(0, sizeof(cpu_set_t), &cpuset);
 ! 	cpus = CPU_COUNT(&cpuset);
   
-! 	// アフィニティ設定
+! 	// Set affinity
 ! 	if (cpu < cpus) {
 ! 		CPU_ZERO(&cpuset);
 ! 		CPU_SET(cpu, &cpuset);
@@ -1438,7 +1438,7 @@
 ! 	int type;
 ! 	char *file;
 ! 
-! 	// スケジューラ設定
+! 	// Set scheduler
 ! 	schedparam.sched_priority = 0;
 ! 	sched_setscheduler(0, SCHED_IDLE, &schedparam);
   
@@ -1462,68 +1462,68 @@
   			break;
   		}
   
-! 		// コマンド取得
+! 		// Get command
   		fp = fdopen(fd, "r+");
 ! 		p = fgets(buf, BUFSIZ, fp);
   
-! 		// コマンド取得に失敗
+! 		// Failed to get command
 ! 		if (!p) {
 ! 			goto next;
 ! 		}
 ! 
-! 		// 改行文字を削除
+! 		// Delete newline char
 ! 		p[strlen(p) - 1] = 0;
   
-! 		// デバイスリスト表示
+! 		// Display device list
 ! 		if (xstrncasecmp(p, "list", 4) == 0) {
 ! 			ListDevice(fp);
 ! 			goto next;
   		}
   
-! 		// パラメータの分離
+! 		// Separate parameters
 ! 		argv[0] = p;
 ! 		for (i = 1; i < 5; i++) {
-! 			// パラメータ値をスキップ
+! 			// Skip parameter value
 ! 			while (*p && (*p != ' ')) {
 ! 				p++;
 ! 			}
   
-! 			// スペースをNULLに置換
+! 			// Replace space by NULL
 ! 			while (*p && (*p == ' ')) {
 ! 				*p++ = 0;
 ! 			}
   
-! 			// パラメータを見失った
+! 			// Lost the parameter
 ! 			if (!*p) {
 ! 				break;
 ! 			}
   
-! 			// パラメータとして認識
+! 			// Identify as parameter
 ! 			argv[i] = p;
 ! 		}
   
-! 		// 全パラメータの取得失敗
+! 		// Failed to get all parameters
 ! 		if (i < 5) {
 ! 			goto next;
   		}
   
-! 		// ID,ユニット,コマンド,タイプ,ファイル
+! 		// ID, unit, command, type, file
 ! 		id = atoi(argv[0]);
 ! 		un = atoi(argv[1]);
 ! 		cmd = atoi(argv[2]);
 ! 		type = atoi(argv[3]);
 ! 		file = argv[4];
   
-! 		// アイドルになるまで待つ
+! 		// Wait until idle
 ! 		while (active) {
 ! 			usleep(500 * 1000);
 ! 		}
   
-! 		// コマンド実行
+! 		// Execute command
 ! 		ProcessCmd(fp, id, un, cmd, type, file);
   
 ! next:
-! 		// 接続解放
+! 		// Release connection
 ! 		fclose(fp);
 ! 		close(fd);
   	}
@@ -1567,12 +1567,12 @@
   			len--;
   		}
   
-! 		// 空行スキップ
+! 		// Skip blank lines
 ! 		if (line[0] == '\0') {
   			continue;
   		}
   
-! 		// 空白とタブ以外の文字まで走査
+! 		// Scan chars until blankspace and tab
 ! 		p = line;
 ! 		while (p[0]) {
 ! 			if (p[0] != ' ' && p[0] != '\t') {
@@ -1581,12 +1581,12 @@
 ! 			p++;
   		}
   
-! 		// コメント行をスキップ
+! 		// Skip comment lines
 ! 		if (p[0] == '#') {
 ! 			continue;
 ! 		}
   
-! 		// 空白とタブまで走査
+! 		// Scan until blankspace and tab
 ! 		q = p;
 ! 		while (q[0]) {
 ! 			if (q[0] == ' ' || q[0] == '\t') {
@@ -1595,12 +1595,12 @@
 + 			q++;
 + 		}
   
-! 		// ID確定
+! 		// Define ID
 ! 		memcpy(argID, p, (q - p));
 ! 		argID[(q - p)] = '\0';
   
   
-! 		// 空白とタブ以外の文字まで走査
+! 		// Scan chars until blankspace and tab
 ! 		p = q;
 ! 		while (p[0]) {
 ! 			if (p[0] != ' ' && p[0] != '\t') {
@@ -1609,7 +1609,7 @@
 ! 			p++;
   		}
   
-! 		// 空白とタブまで走査
+! 		// Scan until blankspace and tab
 ! 		q = p;
 ! 		while (q[0]) {
 ! 			if (q[0] == ' ' || q[0] == '\t') {
@@ -1618,16 +1618,16 @@
 ! 			q++;
   		}
   
-! 		// パス確定
+! 		// Define path
 ! 		memcpy(argPath, p, (q - p));
 ! 		argPath[(q - p)] = '\0';
   
-! 		// 事前チェック
+! 		// Pre check
 ! 		if (argID[0] == '\0' || argPath[0] == '\0') {
 ! 			continue;
   		}
   
-! 		// コマンド解析
+! 		// Parse commands
 ! 		ParseCmd(argID, argPath);
   	}
   
@@ -1639,7 +1639,7 @@
   
   //---------------------------------------------------------------------------
   //
-! //	コントールコマンド処理
+! //	Process control commands
   //
   //---------------------------------------------------------------------------
 ! void ParseCtrCmd(FILE *fp, char *line)
@@ -1653,18 +1653,18 @@
 ! 	int type;
 ! 	char *file;
   
-! 	// 出力先がログバッファならクリア
+! 	// If the target of the output is the buffer, then clear
 ! 	if (!fp) {
 ! 		logbuf[0] = '\0';
 ! 	}
   
-! 	// パラメータ取得
+! 	// Get parameters
 ! 	p = line;
 ! 
-! 	// 改行文字を削除
+! 	// Delete new line chars
 ! 	p[strlen(p) - 1] = 0;
 ! 
-! 	// シャットダウン指示(3秒後)
+! 	// Trigger shutdown (after 3s)
 ! 	if (_xstrncasecmp(p, "shutdown", 8) == 0) {
 ! 		haltreq = TRUE;
 ! #ifdef BAREMETAL
@@ -1675,7 +1675,7 @@
 ! 		return;
 ! 	}
 ! 
-! 	// サーバ終了指示(3秒後)
+! 	// Trigger server shutdown (after 3s)
 ! 	if (_xstrncasecmp(p, "stop", 4) == 0) {
 ! #ifdef BAREMETAL
 ! 		running = FALSE;
@@ -1685,48 +1685,48 @@
 ! 		return;
 ! 	}
 ! 
-! 	// デバイスリスト表示
+! 	// Display device list
 ! 	if (_xstrncasecmp(p, "list", 4) == 0) {
 ! 		ListDevice(fp);
 ! 		return;
 ! 	}
 ! 
-! 	// パラメータの分離
+! 	// Split parameters
 ! 	argv[0] = p;
 ! 	for (i = 1; i < 5; i++) {
-! 		// パラメータ値をスキップ
+! 		// Skip parameter value
 ! 		while (*p && (*p != ' ')) {
 ! 			p++;
 ! 		}
 ! 
-! 		// スペースをNULLに置換
+! 		// Replace space by NULL
 ! 		while (*p && (*p == ' ')) {
 ! 			*p++ = 0;
 ! 		}
 ! 
-! 		// パラメータを見失った
+! 		// Lost track of parameters
 ! 		if (!*p) {
 ! 			break;
 ! 		}
 ! 
-! 		// パラメータとして認識
+! 		// Identify as parameter
 ! 		argv[i] = p;
   	}
 + 
-+ 	// 全パラメータの取得失敗
++ 	// Failed to get all parameters
 + 	if (i < 5) {
 + 		delete[] p;
 + 		return;
 + 	}
 + 
-+ 	// ID,ユニット,コマンド,タイプ,ファイル
++ 	// ID, unit, command, type, file
 + 	id = atoi(argv[0]);
 + 	un = atoi(argv[1]);
 + 	cmd = atoi(argv[2]);
 + 	type = atoi(argv[3]);
 + 	file = argv[4];
 + 
-+ 	// コマンド実行
++ 	// Execute command
 + 	ProcessCmd(fp, id, un, cmd, type, file);
   }
   
@@ -1748,7 +1748,7 @@
   	// CPUを固定
   	FixCpu(2);
   
-+ 	// 実行優先順位
++ 	// Execution priority
 + 	SetExecPrio(PRIO_MIN);
 + 
   	// 実行開始待ち
@@ -1768,21 +1768,21 @@
   			break;
   		}
   
-! 		// コマンドライン取得
+! 		// Get commandline
   		fp = fdopen(fd, "r+");
 ! 		line = fgets(buf, BUFSIZ, fp);
   
 ! 		if (line) {
-! 			// アイドルになるまで待つ
+! 			// Wait until idle
 ! 			while (active) {
 ! 				usleep(500 * 1000);
 ! 			}
   
-! 			// コマンドライン処理
+! 			// Process command line
 ! 			ParseCtrCmd(fp, line);
   		}
   
-! 		// 接続解放
+! 		// Release connection
 ! 		fclose(fp);
 ! 		close(fd);
 ! 	}
@@ -1793,7 +1793,7 @@
   
 ! //---------------------------------------------------------------------------
 ! //
-! //	コントローラコールバック関数
+! //	Controller callback function
 ! //
 ! //---------------------------------------------------------------------------
 ! int CtlCallback(BOOL read, int func, int phase, int len, BYTE *buf)
@@ -1802,12 +1802,12 @@
 ! 	char line[BUFSIZ];
   
 ! 	if (read) {
-! 		// ブリッジがデータの取得を要求している
+! 		// The bridge is requesting data
   
-! 		// 返却データクリア
+! 		// Clear response data
 ! 		memset(buf, 0x00, len);
 ! 
-! 		// ログの転送
+! 		// Transfer log
 ! 		msglen = strlen(logbuf);
 ! 		if (msglen > len) {
 ! 			msglen = len;
@@ -1816,12 +1816,12 @@
   
 ! 		return len;
 ! 	} else {
-! 		// ブリッジがデータの処理を要求している
+! 		// The bridge is requesting processing of data
   
-! 		// コマンドライン取得
+! 		// Get command line
 ! 		strcpy(line, (char*)buf);
   
-! 		// コマンドライン処理
+! 		// Process command line
 ! 		ParseCtrCmd(NULL, line);
   
 ! 		return len;
@@ -1851,7 +1851,7 @@
   	BYTE data;
 ! 
 ! #ifdef BAREMETAL
-! 	// 設定ファイル固定
+! 	// Hard code settings file
 ! 	argv[0] = (char *)"rascsi";
 ! 	argv[1] = (char *)"rascsi.ini";
   #endif	// BAREMETAL
@@ -1937,7 +1937,7 @@
   		goto init_exit;
   	}
   
-! 	// バスリセット
+! 	// Bus reset
 ! 	bus->Reset();
   
   	// BUSYアサート(ホスト側を待たせるため)
@@ -1956,19 +1956,19 @@
 ! 		}
   	}
   
-! 	// デバイスリスト表示
+! 	// Display device list
 ! 	ListDevice(stdout);
 ! 
   	// BUSYネゲート(ホスト側を待たせるため)
   	bus->SetBSY(FALSE);
   
-! 	// コントローラとバスをリセット
+! 	// Reset controllers and bus
 ! 	Reset();
 ! 
   	// CPUを固定
   	FixCpu(3);
   
-! 	// 実行優先順位
+! 	// Execution priority
 ! 	SetExecPrio(PRIO_MAX);
   
   	// 実行開始
@@ -1989,7 +1989,7 @@
   		// バスの状態取得
   		bus->Aquire();
 ! 
-! 		// バスリセットを通知
+! 		// Notify bus reset
 ! 		if (bus->GetRST()) {
 ! 			for (i = 0; i < CtrlMax; i++) {
 ! 				if (ctrl[i]) {
@@ -1998,7 +1998,7 @@
 ! 			}
 ! 		}
 ! 
-! 		// SELECT中で無ければ中断
+! 		// Halt if not SELECT
   		if (!bus->GetSEL()) {
   			continue;
   		}
@@ -2026,7 +2026,7 @@
   			}
   		}
   
-! 		// ビジーまたは他のデバイスが応答したので止める
+! 		// Stop, because busy or another device has responded
   		if (bus->GetBSY() || !bus->GetSEL()) {
   			continue;
   		}
