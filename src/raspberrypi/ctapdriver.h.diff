@@ -43,7 +43,7 @@
 + //	Copyright (C) 2016-2021 GIMONS(Twitter:@kugimoto0715)
   //	Imported NetBSD support and some optimisation patch by Rin Okuyama.
   //
-! //	[ ネットワークドライバ ]
+! //	[ Network driver ]
   //
   //---------------------------------------------------------------------------
   
@@ -54,39 +54,39 @@
 ! class NetDriver
 ! {
 ! public:
-! 	// 基本ファンクション
+! 	// Base functions
 ! 	NetDriver();
-! 										// コンストラクタ
+! 										// Constructor
 ! 	virtual ~NetDriver();
-! 										// デストラクタ
+! 										// Destructor
 ! 
 ! 	int FASTCALL IsNetEnable() { return m_bTapEnable; }
-! 										// ネットワーク機能有効取得
+! 										// Get network functionality enable
 ! 	int FASTCALL Process(BOOL read, int func, int phase, int len, BYTE *buf);
-! 										// 実行
+! 										// Execute
 ! 	int FASTCALL GetMacAddr(BYTE *buf);
-! 										// MACアドレス取得
+! 										// Get MAC address
 ! 	void FASTCALL SetMacAddr(BYTE *buf);
-! 										// MACアドレス設定
+! 										// Set MAC address
 ! 	void FASTCALL ReceivePacket();
-! 										// パケット受信
+! 										// Receive packet
 ! 	void FASTCALL GetPacketBuf(BYTE *buf);
-! 										// パケット取得
+! 										// Get packet
 ! 	void FASTCALL SendPacket(BYTE *buf, int len);
-! 										// パケット送信
+! 										// Send packet
 ! 
 ! 	CTapDriver *tap;
-! 										// TAPドライバ
+! 										// TAP driver
 ! 	BOOL m_bTapEnable;
-! 										// TAP有効フラグ
+! 										// TAP enable flag
 ! 	BYTE mac_addr[6];
-! 										// MACアドレス
+! 										// MAC address
 ! 	int packet_len;
-! 										// 受信パケットサイズ
+! 										// Receive packet size
 ! 	BYTE packet_buf[0x1000];
-! 										// 受信パケットバッファ
+! 										// Receive packet buffer
 ! 	BOOL packet_enable;
-! 										// 受信パケット有効
+! 										// Receive packet enable
 ! };
   
   //===========================================================================
